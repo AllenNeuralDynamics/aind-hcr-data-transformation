@@ -4,7 +4,6 @@ Run data transformation locally
 
 import logging
 import shutil
-import sys
 from pathlib import Path
 from time import time
 from typing import Optional

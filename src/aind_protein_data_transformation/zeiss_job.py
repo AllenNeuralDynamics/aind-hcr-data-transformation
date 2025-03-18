@@ -2,7 +2,6 @@
 
 import logging
 import os
-import re
 import shutil
 import sys
 from pathlib import Path
@@ -117,26 +116,17 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
         compressor = self._get_compressor()
         # TODO: Coordinate with Carson Berry to make it compatible with Z1 uploads
 
-        # acquisition_path = Path(self.job_settings.input_source).joinpath(
-        #     "acquisition.json"
-        # )
-        # voxel_size_zyx = self._get_voxel_resolution(
-        #     acquisition_path=acquisition_path
-        # )
+        acquisition_path = Path(self.job_settings.input_source).joinpath(
+            "acquisition.json"
+        )
+        voxel_size_zyx = self._get_voxel_resolution(
+            acquisition_path=acquisition_path
+        )
 
         for stack in stacks_to_process:
             logging.info(f"Converting {stack}")
-            stack_name = stack.name
-            root_name = stack.parent.name
-
-            match = re.match(r"(.+)\((\d+)\)\.czi", stack_name)
-
-            if match:
-                base_name, number = match.groups()
-                stack_name = f"{base_name}_{number}"
-
-            else:
-                stack_name = f"{stack_name}_0"
+            stack_name = stack.stem
+            root_name = stack.parent.parent.stem
 
             output_path = Path(self.job_settings.output_directory).joinpath(
                 root_name
@@ -144,12 +134,12 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
 
             czi_file_reader = BioImage(str(stack), reader=bioio_czi.Reader)
 
-            voxel_size_zyx = czi_file_reader.physical_pixel_sizes
-            voxel_size_zyx = [
-                voxel_size_zyx.Z,
-                voxel_size_zyx.Y,
-                voxel_size_zyx.X,
-            ]
+            # voxel_size_zyx = czi_file_reader.physical_pixel_sizes
+            # voxel_size_zyx = [
+            #     voxel_size_zyx.Z,
+            #     voxel_size_zyx.Y,
+            #     voxel_size_zyx.X,
+            # ]
             delayed_stack = da.squeeze(czi_file_reader.dask_data)
 
             msg = (
