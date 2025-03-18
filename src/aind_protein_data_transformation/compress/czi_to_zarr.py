@@ -397,6 +397,7 @@ def czi_stack_zarr_writer(
     logger: logging.Logger,
     stack_name: str,
     writing_options,
+    target_size_mb: Optional[int] = 19200,
 ):
     """
     Writes a fused Zeiss channel in OMEZarr
@@ -437,6 +438,9 @@ def czi_stack_zarr_writer(
 
     logger: logging.Logger
         Logger object
+
+    target_size_mb: Optional[int]
+        Target size to pull from the CZI array.
 
     """
 
@@ -509,7 +513,7 @@ def czi_stack_zarr_writer(
     # Writing zarr
     block_shape = list(
         BlockedArrayWriter.get_block_shape(
-            arr=image_data, target_size_mb=12800  # 51200,
+            arr=image_data, target_size_mb=target_size_mb
         )
     )
 
@@ -517,6 +521,11 @@ def czi_stack_zarr_writer(
     block_shape = ([1] * (5 - len(block_shape))) + block_shape
     written_pyramid = []
     pyramid_group = None
+
+    logger.info(
+        f"Block shape to write: {block_shape} - Dataset: {image_data.shape}"
+    )
+    print(f"Block shape to write: {block_shape} - Dataset: {image_data.shape}")
 
     # Writing multiple levels
     for level in range(n_lvls):

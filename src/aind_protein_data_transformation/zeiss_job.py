@@ -169,6 +169,7 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
                 stack_name=f"{stack_name}.ome.zarr",
                 logger=logging,
                 writing_options=compressor,
+                target_size_mb=self.job_settings.target_size_mb,
             )
 
             if self.job_settings.s3_location is not None:
