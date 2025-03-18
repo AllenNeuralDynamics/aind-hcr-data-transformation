@@ -5,7 +5,6 @@ a dask array and writes it on disk in
 zarr format
 """
 
-import gc
 from typing import Generator, Tuple
 
 import dask.array as da
@@ -212,8 +211,6 @@ class BlockedArrayWriter:
                 compute=True,
                 return_stored=False,
             )
-
-        gc.collect()
 
     @staticmethod
     def get_block_shape(arr, target_size_mb=409600, mode="cycle"):
