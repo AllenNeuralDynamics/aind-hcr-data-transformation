@@ -114,9 +114,10 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
 
         """
         compressor = self._get_compressor()
-        # TODO: Coordinate with Carson Berry to make it compatible with Z1 uploads
 
-        acquisition_path = Path(self.job_settings.input_source).joinpath(
+        root_path = Path(self.job_settings.input_source).parent
+        root_name = root_path.stem
+        acquisition_path = root_path.joinpath(
             "acquisition.json"
         )
         voxel_size_zyx = self._get_voxel_resolution(
@@ -126,7 +127,6 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
         for stack in stacks_to_process:
             logging.info(f"Converting {stack}")
             stack_name = stack.stem
-            root_name = stack.parent.parent.stem
 
             output_path = Path(self.job_settings.output_directory).joinpath(
                 root_name
