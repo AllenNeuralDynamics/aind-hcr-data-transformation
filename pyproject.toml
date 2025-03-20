@@ -42,7 +42,7 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.dynamic]
-version = {attr = "aind_protein_data_transformation.__version__"}
+version = {attr = "aind_hcr_data_transformation.__version__"}
 
 [tool.black]
 line-length = 79
@@ -67,7 +67,7 @@ exclude = '''
 
 [tool.coverage.run]
 omit = ["*__init__*"]
-source = ["aind_protein_data_transformation", "tests"]
+source = ["aind_hcr_data_transformation", "tests"]
 
 [tool.coverage.report]
 exclude_lines = [
