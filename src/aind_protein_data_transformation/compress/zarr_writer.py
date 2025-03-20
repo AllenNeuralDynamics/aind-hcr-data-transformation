@@ -213,7 +213,7 @@ class BlockedArrayWriter:
             )
 
     @staticmethod
-    def get_block_shape(arr, target_size_mb=409600, mode="cycle"):
+    def get_block_shape(arr, target_size_mb=409600, mode="cycle", chunks=None):
         """
         Given the shape and chunk size of a pre-chunked
         array, determine the optimal block shape closest
@@ -230,11 +230,14 @@ class BlockedArrayWriter:
         Returns:
             the block shape
         """
-        if isinstance(arr, da.Array):
-            chunks = arr.chunksize[-3:]
-        else:
-            chunks = arr.chunks[-3:]
 
+        if chunks is None:
+            if isinstance(arr, da.Array):
+                chunks = arr.chunksize
+            else:
+                chunks = arr.chunks
+
+        chunks = chunks[-3:]
         return expand_chunks(
             chunks,
             arr.shape[-3:],
