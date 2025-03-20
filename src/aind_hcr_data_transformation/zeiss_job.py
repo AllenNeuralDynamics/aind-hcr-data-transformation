@@ -114,9 +114,7 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
 
         root_path = Path(self.job_settings.input_source).parent
         root_name = root_path.stem
-        acquisition_path = root_path.joinpath(
-            "acquisition.json"
-        )
+        acquisition_path = root_path.joinpath("acquisition.json")
         voxel_size_zyx = self._get_voxel_resolution(
             acquisition_path=acquisition_path
         )

@@ -3,17 +3,18 @@ Utility functions for image readers
 """
 
 import json
+import multiprocessing
 import os
 import platform
 import subprocess
-from typing import Optional, List
+from concurrent.futures import ThreadPoolExecutor
+from typing import List, Optional
 
 import numpy as np
+from czifile.czifile import create_output
 
 from aind_hcr_data_transformation.models import ArrayLike, PathLike
-from concurrent.futures import ThreadPoolExecutor
-import multiprocessing
-from czifile.czifile import create_output
+
 
 def add_leading_dim(data: ArrayLike) -> ArrayLike:
     """
@@ -202,15 +203,16 @@ def copy_file_to_s3(file_to_upload: PathLike, s3_location: str) -> None:
 
     subprocess.run(base_command, shell=shell, check=True)
 
+
 def read_slices_czi(
     czi_stream,
     start_slice: int,
     end_slice: int,
-    slice_axis: Optional[str] = 'z',
+    slice_axis: Optional[str] = "z",
     resize: Optional[bool] = True,
     order: Optional[int] = 0,
     out: Optional[List[int]] = None,
-    max_workers: Optional[int] = None
+    max_workers: Optional[int] = None,
 ):
     """
     Reads chunked data from CZI files. From AIND-Zeiss
@@ -227,7 +229,7 @@ def read_slices_czi(
 
     end_slice: int
         End slice from where the data will be pulled.
-        
+
     slice_axis: Optional[str] = 'z'
         Axis in which start and end slice parameters will
         be applied.
@@ -248,7 +250,7 @@ def read_slices_czi(
     max_workers: Optional[int] = None
         Number of workers that will be pulling data.
         Default: None
-    
+
     Returns
     -------
     np.ndarray
@@ -268,11 +270,15 @@ def read_slices_czi(
 
     # Validate slice parameters
     if start_slice > len_dir or end_slice > len_dir:
-        raise ValueError(f"Slices out of bounds. Total: {len_dir} - Start: {start_slice} end {end_slice}")
-    
+        raise ValueError(
+            f"Slices out of bounds. Total: {len_dir} - Start: {start_slice} end {end_slice}"
+        )
+
     if start_slice < 0 or end_slice < 0:
-        raise ValueError(f"Slices out of bounds. Total: {len_dir} - Start: {start_slice} end {end_slice}")
-    
+        raise ValueError(
+            f"Slices out of bounds. Total: {len_dir} - Start: {start_slice} end {end_slice}"
+        )
+
     if start_slice >= end_slice:
         raise ValueError("Start and end slices can't be the same range!")
 
@@ -282,19 +288,29 @@ def read_slices_czi(
     new_shape[ax_index] = end_slice - start_slice
 
     # Setting channel axis to 1 by default - Zeiss assuming 1 channel per czi
-    new_shape[axes.index('c')] = 1
-    
+    new_shape[axes.index("c")] = 1
+
     # Create output array if not provided
     out = create_output(out, new_shape, dtype)
 
     # Set maximum number of worker threads
     if max_workers is None:
-        max_workers = min(multiprocessing.cpu_count() // 2, end_slice - start_slice)
+        max_workers = min(
+            multiprocessing.cpu_count() // 2, end_slice - start_slice
+        )
 
     # Filter directory entries to only process the requested range
     selected_entries = subblock_directory[start_slice:end_slice]
-    
-    def func(args):
+
+    def parallel_reader(args):
+        """
+        Parallel CZI internal reader
+        
+        Parameters
+        ----------
+        args: tuple
+            Index and directory entry of the CZI file.
+        """
         idx, directory_entry = args
 
         subblock = directory_entry.data_segment()
@@ -302,19 +318,14 @@ def read_slices_czi(
         dir_start = tuple(np.array(directory_entry.start) - nominal_start)
 
         # Calculate the index for placing this tile in the output array
-        index = list(slice(i, i + k) for i, k in
-            zip(
-                dir_start,
-                tile.shape
-            )
-        )
+        index = list(slice(i, i + k) for i, k in zip(dir_start, tile.shape))
         index[ax_index] = slice(
             index[ax_index].start - start_slice,
             index[ax_index].stop - start_slice,
         )
 
         index = tuple(index)
-        
+
         # Print the index information
         # print(f"Subblock {idx + start_slice}")
         # print(f"  Directory entry start: {directory_entry.start}")
@@ -324,31 +335,31 @@ def read_slices_czi(
         try:
             out[index] = tile
         except ValueError as e:
-            raise ValueError(f"Error writing subblock {idx + start_slice}: {e}")
-        
+            raise ValueError(
+                f"Error writing subblock {idx + start_slice}: {e}"
+            )
+
         return idx
 
     # Process the subblocks
     if max_workers > 1 and end_slice - start_slice > 1:
         czi_stream._fh.lock = True
         with ThreadPoolExecutor(max_workers) as executor:
-            results = list(executor.map(func, enumerate(selected_entries)))
+            results = list(executor.map(parallel_reader, enumerate(selected_entries)))
         czi_stream._fh.lock = None
         # print(f"Processed {len(results)} subblocks using {max_workers} workers")
     else:
         for idx, directory_entry in enumerate(selected_entries):
-            func((idx, directory_entry))
+            parallel_reader((idx, directory_entry))
         # print(f"Processed {len(selected_entries)} subblocks sequentially")
 
-    if hasattr(out, 'flush'):
+    if hasattr(out, "flush"):
         out.flush()
 
     return np.squeeze(out)
 
-def generate_jumps(
-    n: int,
-    jump_size: Optional[int] = 128
-):
+
+def generate_jumps(n: int, jump_size: Optional[int] = 128):
     """
     Generates jumps for indexing.
 
@@ -367,11 +378,8 @@ def generate_jumps(
 
     return jumps
 
-def get_axis_index(
-    czi_shape: List[int],
-    czi_axis: int,
-    axis_name: str
-):
+
+def get_axis_index(czi_shape: List[int], czi_axis: int, axis_name: str):
     """
     Gets the axis index from the CZI natural shape.
 
@@ -391,7 +399,20 @@ def get_axis_index(
     """
     czi_axis = list(str(czi_axis).lower())
     axis_name = axis_name.lower()
-    ALLOWED_AXIS_NAMES = ['b', 'v', 'i', 'h', 'r', 's', 'c', 't', 'z', 'y', 'x', '0']
+    ALLOWED_AXIS_NAMES = [
+        "b",
+        "v",
+        "i",
+        "h",
+        "r",
+        "s",
+        "c",
+        "t",
+        "z",
+        "y",
+        "x",
+        "0",
+    ]
 
     if axis_name not in ALLOWED_AXIS_NAMES:
         raise ValueError(f"Axis {axis_name} not valid!")
@@ -401,10 +422,11 @@ def get_axis_index(
 
     return ax_index, czi_shape[ax_index]
 
+
 def czi_block_generator(
     czi_decriptor,
     axis_jumps: Optional[int] = 128,
-    slice_axis: Optional[str] = 'z',
+    slice_axis: Optional[str] = "z",
 ):
     """
     CZI data block generator.
@@ -413,11 +435,11 @@ def czi_block_generator(
     ----------
     czi_decriptor
         Opened CZI file.
-    
+
     axis_jumps: int
         Number of jumps in a given axis.
         Default: 128
-    
+
     slice_axis: str
         Axis in which the jumps will be
         generated.
@@ -433,11 +455,9 @@ def czi_block_generator(
         Slice of start and end positions
         in a given axis.
     """
-    
+
     axis_index, axis_shape = get_axis_index(
-        czi_decriptor.shape,
-        czi_decriptor.axes,
-        slice_axis
+        czi_decriptor.shape, czi_decriptor.axes, slice_axis
     )
 
     jumps = generate_jumps(axis_shape, axis_jumps)
@@ -445,7 +465,7 @@ def czi_block_generator(
     for i, start_slice in enumerate(jumps):
         if i + 1 < n_jumps:
             end_slice = jumps[i + 1] - 1
-        
+
         else:
             end_slice = axis_shape
 
@@ -457,6 +477,6 @@ def czi_block_generator(
             resize=True,
             order=0,
             out=None,
-            max_workers=None
+            max_workers=None,
         )
         yield block, slice(start_slice, end_slice)
