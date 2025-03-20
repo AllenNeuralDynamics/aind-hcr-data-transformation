@@ -10,7 +10,7 @@ from typing import Optional, List
 
 import numpy as np
 
-from aind_protein_data_transformation.models import ArrayLike, PathLike
+from aind_hcr_data_transformation.models import ArrayLike, PathLike
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
 from czifile.czifile import create_output

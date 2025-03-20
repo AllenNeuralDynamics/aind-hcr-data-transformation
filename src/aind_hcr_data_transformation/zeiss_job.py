@@ -11,14 +11,14 @@ from typing import Any, List, Optional
 from aind_data_transformation.core import GenericEtl, JobResponse, get_parser
 from numcodecs.blosc import Blosc
 
-from aind_protein_data_transformation.compress.czi_to_zarr import (
+from aind_hcr_data_transformation.compress.czi_to_zarr import (
     czi_stack_zarr_writer,
 )
-from aind_protein_data_transformation.models import (
+from aind_hcr_data_transformation.models import (
     CompressorName,
     ZeissJobSettings,
 )
-from aind_protein_data_transformation.utils import utils
+from aind_hcr_data_transformation.utils import utils
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "WARNING"))
 

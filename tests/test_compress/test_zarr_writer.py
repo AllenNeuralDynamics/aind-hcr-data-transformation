@@ -7,7 +7,7 @@ import unittest
 import dask.array as da
 import numpy as np
 
-from aind_protein_data_transformation.compress import zarr_writer
+from aind_hcr_data_transformation.compress import zarr_writer
 
 
 class ZarrWriterTest(unittest.TestCase):

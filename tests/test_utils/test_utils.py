@@ -9,7 +9,7 @@ from pathlib import Path
 import dask.array as da
 import numpy as np
 
-from aind_protein_data_transformation.utils import utils
+from aind_hcr_data_transformation.utils import utils
 
 RESOURCES_DIR = (
     Path(os.path.dirname(os.path.realpath(__file__))) / ".." / "resources"

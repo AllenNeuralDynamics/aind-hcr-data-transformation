@@ -4,8 +4,8 @@ Example job with partitioning
 
 import sys
 
-from aind_protein_data_transformation.models import ZeissJobSettings
-from aind_protein_data_transformation.zeiss_job import ZeissCompressionJob
+from aind_hcr_data_transformation.models import ZeissJobSettings
+from aind_hcr_data_transformation.zeiss_job import ZeissCompressionJob
 
 
 def main(partition_id):

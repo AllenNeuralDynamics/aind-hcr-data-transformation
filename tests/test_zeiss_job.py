@@ -9,8 +9,8 @@ from unittest.mock import patch
 from natsort import natsorted
 from numcodecs.blosc import Blosc
 
-from aind_protein_data_transformation.models import ZeissJobSettings
-from aind_protein_data_transformation.zeiss_job import (
+from aind_hcr_data_transformation.models import ZeissJobSettings
+from aind_hcr_data_transformation.zeiss_job import (
     ZeissCompressionJob,
 )
 

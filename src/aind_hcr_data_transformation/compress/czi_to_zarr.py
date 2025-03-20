@@ -20,10 +20,10 @@ from ome_zarr.format import CurrentFormat
 from ome_zarr.io import parse_url
 from ome_zarr.writer import write_multiscales_metadata
 
-from aind_protein_data_transformation.compress.zarr_writer import (
+from aind_hcr_data_transformation.compress.zarr_writer import (
     BlockedArrayWriter,
 )
-from aind_protein_data_transformation.utils.utils import (
+from aind_hcr_data_transformation.utils.utils import (
     czi_block_generator,
     pad_array_n_d,
 )

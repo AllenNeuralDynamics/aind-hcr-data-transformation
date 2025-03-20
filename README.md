@@ -1,4 +1,8 @@
-# aind-protein-data-transformation
+# aind-hcr-data-transformation
+
+This repository was created to convert CZI files into Zarr format. It is structured in a way in how we could use a High Performance Compute Cluster to distribute tiles among multiple workers.
+
+Each worker will have a predefined set of tiles to be converted, AIND Zeiss Microscope acquires data in CZI format and they are chunked in a per slice basis. And example script can be found inside of the scripts folder.
 
 [![License](https://img.shields.io/badge/license-MIT-brightgreen)](LICENSE)
 ![Code Style](https://img.shields.io/badge/code%20style-black-black)
