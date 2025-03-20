@@ -305,11 +305,16 @@ def read_slices_czi(
     def parallel_reader(args):
         """
         Parallel CZI internal reader
-        
+
         Parameters
         ----------
         args: tuple
             Index and directory entry of the CZI file.
+
+        Returns
+        -------
+        List
+            List with slices where the data was stored.
         """
         idx, directory_entry = args
 
@@ -345,7 +350,9 @@ def read_slices_czi(
     if max_workers > 1 and end_slice - start_slice > 1:
         czi_stream._fh.lock = True
         with ThreadPoolExecutor(max_workers) as executor:
-            results = list(executor.map(parallel_reader, enumerate(selected_entries)))
+            _ = list(
+                executor.map(parallel_reader, enumerate(selected_entries))
+            )
         czi_stream._fh.lock = None
         # print(f"Processed {len(results)} subblocks using {max_workers} workers")
     else:

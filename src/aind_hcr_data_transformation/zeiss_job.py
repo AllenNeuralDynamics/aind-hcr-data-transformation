@@ -208,10 +208,9 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
 
         partitioned_list = self._get_partitioned_list_of_stack_paths()
 
-        # TODO: Coordinate with Carson Berry to upload derivatives folder
         # Upload derivatives folder
-        # if self.job_settings.partition_to_process == 0:
-        #     self._upload_derivatives_folder()
+        if self.job_settings.partition_to_process == 0:
+            self._upload_derivatives_folder()
 
         stacks_to_process = partitioned_list[
             self.job_settings.partition_to_process

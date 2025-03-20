@@ -10,9 +10,7 @@ from natsort import natsorted
 from numcodecs.blosc import Blosc
 
 from aind_hcr_data_transformation.models import ZeissJobSettings
-from aind_hcr_data_transformation.zeiss_job import (
-    ZeissCompressionJob,
-)
+from aind_hcr_data_transformation.zeiss_job import ZeissCompressionJob
 
 RESOURCES_DIR = Path(os.path.dirname(os.path.realpath(__file__))) / "resources"
 

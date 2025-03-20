@@ -7,12 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from aind_hcr_data_transformation.models import (
-    ZeissJobSettings,
-)
-from aind_hcr_data_transformation.zeiss_job import (
-    ZeissCompressionJob,
-)
+from aind_hcr_data_transformation.models import ZeissJobSettings
+from aind_hcr_data_transformation.zeiss_job import ZeissCompressionJob
 
 
 class ZarrCompressionTest(unittest.TestCase):
