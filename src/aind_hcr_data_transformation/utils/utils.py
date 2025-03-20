@@ -204,6 +204,82 @@ def copy_file_to_s3(file_to_upload: PathLike, s3_location: str) -> None:
     subprocess.run(base_command, shell=shell, check=True)
 
 
+def validate_slices(start_slice: int, end_slice: int, len_dir: int):
+    """
+    Validates that the slice indices are within bounds
+
+    Parameters
+    ----------
+    start_slice: int
+        Start slice integer
+
+    end_slice: int
+        End slice integer
+
+    len_dir: int
+        Len of czi directory
+    """
+    if not (0 <= start_slice < end_slice <= len_dir):
+        msg = (
+            f"Slices out of bounds. Total: {len_dir}"
+            f"Start: {start_slice}, End: {end_slice}"
+        )
+        raise ValueError(msg)
+
+
+def parallel_reader(
+    args: tuple,
+    out: np.ndarray,
+    nominal_start: np.ndarray,
+    start_slice: int,
+    ax_index: int,
+    resize: bool,
+    order: int,
+):
+    """
+    Reads a single subblock and places it in the output array.
+
+    Parameters
+    ----------
+    args: tuple
+        Index and directory entry of the czi file.
+
+    out: np.ndarray
+        Placeholder array for the data
+
+    nominal_start: np.ndarray
+        Nominal start of the dataset when it was acquired.
+
+    start_slice: int
+        Start slice.
+
+    ax_index: int
+        Axis index.
+
+    resize: bool
+        True if resizing is needed when reading CZI data.
+
+    order: int
+        Interpolation in resizing.
+    """
+    idx, directory_entry = args
+    subblock = directory_entry.data_segment()
+    tile = subblock.data(resize=resize, order=order)
+    dir_start = np.array(directory_entry.start) - nominal_start
+
+    # Calculate index placement
+    index = tuple(slice(i, i + k) for i, k in zip(dir_start, tile.shape))
+    index = list(index)
+    index[ax_index] = slice(
+        index[ax_index].start - start_slice, index[ax_index].stop - start_slice
+    )
+
+    try:
+        out[tuple(index)] = tile
+    except ValueError as e:
+        raise ValueError(f"Error writing subblock {idx + start_slice}: {e}")
+
+
 def read_slices_czi(
     czi_stream,
     start_slice: int,
@@ -256,109 +332,57 @@ def read_slices_czi(
     np.ndarray
         Numpy array with the pulled data
     """
-    shape = czi_stream.shape
-    dtype = czi_stream.dtype
-    axes = list(czi_stream.axes.lower())
 
-    slice_axis = str(slice_axis).lower()
-
-    # print(axes, len(axes), len(shape), shape, axes.index(slice_axis))
+    shape, dtype, axes = (
+        czi_stream.shape,
+        czi_stream.dtype,
+        list(czi_stream.axes.lower()),
+    )
     nominal_start = np.array(czi_stream.start)
-
     subblock_directory = czi_stream.filtered_subblock_directory
     len_dir = len(subblock_directory)
 
-    # Validate slice parameters
-    if start_slice > len_dir or end_slice > len_dir:
-        raise ValueError(
-            f"Slices out of bounds. Total: {len_dir} - Start: {start_slice} end {end_slice}"
-        )
+    validate_slices(start_slice, end_slice, len_dir)
 
-    if start_slice < 0 or end_slice < 0:
-        raise ValueError(
-            f"Slices out of bounds. Total: {len_dir} - Start: {start_slice} end {end_slice}"
-        )
-
-    if start_slice >= end_slice:
-        raise ValueError("Start and end slices can't be the same range!")
-
-    # Calculate the shape of the output array
+    ax_index = axes.index(slice_axis.lower())
     new_shape = list(shape)
-    ax_index = axes.index(slice_axis)
     new_shape[ax_index] = end_slice - start_slice
+    new_shape[axes.index("c")] = 1  # Assume 1 channel per CZI
 
-    # Setting channel axis to 1 by default - Zeiss assuming 1 channel per czi
-    new_shape[axes.index("c")] = 1
-
-    # Create output array if not provided
     out = create_output(out, new_shape, dtype)
+    max_workers = max_workers or min(
+        multiprocessing.cpu_count() // 2, end_slice - start_slice
+    )
 
-    # Set maximum number of worker threads
-    if max_workers is None:
-        max_workers = min(
-            multiprocessing.cpu_count() // 2, end_slice - start_slice
-        )
-
-    # Filter directory entries to only process the requested range
     selected_entries = subblock_directory[start_slice:end_slice]
 
-    def parallel_reader(args):
-        """
-        Parallel CZI internal reader
-
-        Parameters
-        ----------
-        args: tuple
-            Index and directory entry of the CZI file.
-
-        Returns
-        -------
-        List
-            List with slices where the data was stored.
-        """
-        idx, directory_entry = args
-
-        subblock = directory_entry.data_segment()
-        tile = subblock.data(resize=resize, order=order)
-        dir_start = tuple(np.array(directory_entry.start) - nominal_start)
-
-        # Calculate the index for placing this tile in the output array
-        index = list(slice(i, i + k) for i, k in zip(dir_start, tile.shape))
-        index[ax_index] = slice(
-            index[ax_index].start - start_slice,
-            index[ax_index].stop - start_slice,
-        )
-
-        index = tuple(index)
-
-        # Print the index information
-        # print(f"Subblock {idx + start_slice}")
-        # print(f"  Directory entry start: {directory_entry.start}")
-        # print(f"  Tile shape: {tile.shape}")
-        # print(f"  Index used: {index}")
-
-        try:
-            out[index] = tile
-        except ValueError as e:
-            raise ValueError(
-                f"Error writing subblock {idx + start_slice}: {e}"
-            )
-
-        return idx
-
-    # Process the subblocks
     if max_workers > 1 and end_slice - start_slice > 1:
         czi_stream._fh.lock = True
         with ThreadPoolExecutor(max_workers) as executor:
-            _ = list(
-                executor.map(parallel_reader, enumerate(selected_entries))
+            executor.map(
+                lambda args: parallel_reader(
+                    args,
+                    out,
+                    nominal_start,
+                    start_slice,
+                    ax_index,
+                    resize,
+                    order,
+                ),
+                enumerate(selected_entries),
             )
         czi_stream._fh.lock = None
-        # print(f"Processed {len(results)} subblocks using {max_workers} workers")
     else:
-        for idx, directory_entry in enumerate(selected_entries):
-            parallel_reader((idx, directory_entry))
-        # print(f"Processed {len(selected_entries)} subblocks sequentially")
+        for idx, entry in enumerate(selected_entries):
+            parallel_reader(
+                (idx, entry),
+                out,
+                nominal_start,
+                start_slice,
+                ax_index,
+                resize,
+                order,
+            )
 
     if hasattr(out, "flush"):
         out.flush()
