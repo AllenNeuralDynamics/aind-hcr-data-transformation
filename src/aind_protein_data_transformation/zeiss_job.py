@@ -8,10 +8,7 @@ from pathlib import Path
 from time import time
 from typing import Any, List, Optional
 
-import bioio_czi
-import dask.array as da
 from aind_data_transformation.core import GenericEtl, JobResponse, get_parser
-from bioio import BioImage
 from numcodecs.blosc import Blosc
 
 from aind_protein_data_transformation.compress.czi_to_zarr import (
@@ -132,24 +129,21 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
                 root_name
             )
 
-            czi_file_reader = BioImage(str(stack), reader=bioio_czi.Reader)
-
             # voxel_size_zyx = czi_file_reader.physical_pixel_sizes
             # voxel_size_zyx = [
             #     voxel_size_zyx.Z,
             #     voxel_size_zyx.Y,
             #     voxel_size_zyx.X,
             # ]
-            delayed_stack = da.squeeze(czi_file_reader.dask_data)
 
             msg = (
                 f"Voxel resolution ZYX {voxel_size_zyx} for {stack} "
-                f"with name {stack_name} - {delayed_stack} - output: {output_path}"
+                f"with name {stack_name} - output: {output_path}"
             )
             logging.info(msg)
 
             czi_stack_zarr_writer(
-                image_data=delayed_stack,
+                czi_path=str(stack),
                 output_path=output_path,
                 voxel_size=voxel_size_zyx,
                 final_chunksize=self.job_settings.chunk_size,
