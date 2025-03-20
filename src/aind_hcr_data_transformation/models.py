@@ -74,3 +74,8 @@ class ZeissJobSettings(BasicJobSettings):
         description="The number of levels of the image pyramid",
         title="Downsample Levels",
     )
+    target_size_mb: int = Field(
+        default=19200,
+        description="Target size to pull from the CZI file to zarr",
+        title="Target Size",
+    )

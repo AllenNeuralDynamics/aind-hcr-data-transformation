@@ -9,6 +9,7 @@ import logging
 import time
 from typing import Dict, Hashable, List, Optional, Sequence, Tuple, Union, cast
 
+import czifile
 import dask
 import dask.array as da
 import numpy as np
@@ -19,10 +20,13 @@ from ome_zarr.format import CurrentFormat
 from ome_zarr.io import parse_url
 from ome_zarr.writer import write_multiscales_metadata
 
-from aind_protein_data_transformation.compress.zarr_writer import (
+from aind_hcr_data_transformation.compress.zarr_writer import (
     BlockedArrayWriter,
 )
-from aind_protein_data_transformation.utils.utils import pad_array_n_d
+from aind_hcr_data_transformation.utils.utils import (
+    czi_block_generator,
+    pad_array_n_d,
+)
 
 
 def _build_ome(
@@ -221,7 +225,8 @@ def _get_axes_5d(
 
 def write_ome_ngff_metadata(
     group: zarr.Group,
-    arr: da.Array,
+    arr_shape: List[int],
+    final_chunksize: List[int],
     image_name: str,
     n_lvls: int,
     scale_factors: tuple,
@@ -239,8 +244,8 @@ def write_ome_ngff_metadata(
     ----------
     group : zarr.Group
         The output Zarr group.
-    arr : array-like
-        The input array.
+    arr_shape : List[int]
+        List of ints with the dataset shape.
     image_name : str
         The name of the image.
     n_lvls : int
@@ -270,7 +275,7 @@ def write_ome_ngff_metadata(
 
     # Building the OMERO metadata
     ome_json = _build_ome(
-        arr.shape,
+        arr_shape,
         image_name,
         channel_names=channel_names,
         channel_colors=channel_colors,
@@ -280,10 +285,10 @@ def write_ome_ngff_metadata(
     group.attrs["omero"] = ome_json
     axes_5d = _get_axes_5d()
     coordinate_transformations, chunk_opts = _compute_scales(
-        n_lvls, scale_factors, voxel_size, arr.chunksize, arr.shape, None
+        n_lvls, scale_factors, voxel_size, final_chunksize, arr_shape, None
     )
     fmt.validate_coordinate_transformations(
-        arr.ndim, n_lvls, coordinate_transformations
+        len(arr_shape), n_lvls, coordinate_transformations
     )
     # Setting coordinate transfomations
     datasets = [{"path": str(i)} for i in range(n_lvls)]
@@ -387,8 +392,8 @@ def compute_pyramid(
 
 
 def czi_stack_zarr_writer(
-    image_data,
-    output_path,
+    czi_path: str,
+    output_path: str,
     voxel_size: List[float],
     final_chunksize: List[int],
     scale_factor: List[int],
@@ -397,6 +402,7 @@ def czi_stack_zarr_writer(
     logger: logging.Logger,
     stack_name: str,
     writing_options,
+    target_size_mb: Optional[int] = 24000,
 ):
     """
     Writes a fused Zeiss channel in OMEZarr
@@ -404,8 +410,8 @@ def czi_stack_zarr_writer(
 
     Parameters
     ----------
-    image_data: ArrayLike
-        Lazy readed CZI stack data
+    czi_path: str
+        Path where the CZI file is stored.
 
     output_path: PathLike
         Path where we want to write the OMEZarr
@@ -438,94 +444,119 @@ def czi_stack_zarr_writer(
     logger: logging.Logger
         Logger object
 
+    target_size_mb: Optional[int]
+        Target size to pull from the CZI array.
+
     """
-
-    # Getting channel color
-    channel_colors = None
-
-    # Rechunking dask array
-    image_data = image_data.rechunk(final_chunksize)
-    image_data = pad_array_n_d(arr=image_data)
-
-    image_name = stack_name
-
-    print(f"Writing {image_data} from {stack_name} to {output_path}")
-
-    # Creating Zarr dataset
-    store = parse_url(path=output_path, mode="w").store
-    root_group = zarr.group(store=store)
-
-    # Using 1 thread since is in single machine.
-    # Avoiding the use of multithreaded due to GIL
-
-    if np.issubdtype(image_data.dtype, np.integer):
-        np_info_func = np.iinfo
-
-    else:
-        # Floating point
-        np_info_func = np.finfo
-
-    # Getting min max metadata for the dtype
-    channel_minmax = [
-        (
-            np_info_func(image_data.dtype).min,
-            np_info_func(image_data.dtype).max,
-        )
-        for _ in range(image_data.shape[1])
-    ]
-
-    # Setting values for CZI
-    # Ideally we would use da.percentile(image_data, (0.1, 95))
-    # However, it would take so much time and resources and it is
-    # not used that much on neuroglancer
-    channel_startend = [(0.0, 550.0) for _ in range(image_data.shape[1])]
-
-    new_channel_group = root_group.create_group(
-        name=image_name, overwrite=True
-    )
-
-    # Writing OME-NGFF metadata
-    write_ome_ngff_metadata(
-        group=new_channel_group,
-        arr=image_data,
-        image_name=image_name,
-        n_lvls=n_lvls,
-        scale_factors=scale_factor,
-        voxel_size=voxel_size,
-        channel_names=[channel_name],
-        channel_colors=channel_colors,
-        channel_minmax=channel_minmax,
-        channel_startend=channel_startend,
-        metadata=_get_pyramid_metadata(),
-    )
-
-    # performance_report_path = f"{output_path}/report_{stack_name}.html"
-
-    start_time = time.time()
-    # Writing zarr and performance report
-    # with performance_report(filename=performance_report_path):
-    logger.info(f"Writing channel {channel_name}/{stack_name}")
-
-    # Writing zarr
-    block_shape = list(
-        BlockedArrayWriter.get_block_shape(
-            arr=image_data, target_size_mb=12800  # 51200,
-        )
-    )
-
-    # Formatting to 5D block shape
-    block_shape = ([1] * (5 - len(block_shape))) + block_shape
     written_pyramid = []
-    pyramid_group = None
+    start_time = time.time()
 
-    # Writing multiple levels
-    for level in range(n_lvls):
-        if not level:
-            array_to_write = image_data
+    with czifile.CziFile(str(czi_path)) as czi:
+        dataset_shape = tuple(i for i in czi.shape if i != 1)
+        extra_axes = (1,) * (5 - len(dataset_shape))
+        dataset_shape = extra_axes + dataset_shape
+
+        final_chunksize = ([1] * (5 - len(final_chunksize))) + final_chunksize
+        # Getting channel color
+        channel_colors = None
+
+        print(f"Writing {dataset_shape} from {stack_name} to {output_path}")
+
+        # Creating Zarr dataset
+        store = parse_url(path=output_path, mode="w").store
+        root_group = zarr.group(store=store)
+
+        # Using 1 thread since is in single machine.
+        # Avoiding the use of multithreaded due to GIL
+
+        if np.issubdtype(czi.dtype, np.integer):
+            np_info_func = np.iinfo
 
         else:
-            # It's faster to write the scale and then read it back
-            # to compute the next scale
+            # Floating point
+            np_info_func = np.finfo
+
+        # Getting min max metadata for the dtype
+        channel_minmax = [
+            (
+                np_info_func(czi.dtype).min,
+                np_info_func(czi.dtype).max,
+            )
+            for _ in range(dataset_shape[1])
+        ]
+
+        # Setting values for CZI
+        # Ideally we would use da.percentile(image_data, (0.1, 95))
+        # However, it would take so much time and resources and it is
+        # not used that much on neuroglancer
+        channel_startend = [(0.0, 550.0) for _ in range(dataset_shape[1])]
+
+        new_channel_group = root_group.create_group(
+            name=stack_name, overwrite=True
+        )
+
+        # Writing OME-NGFF metadata
+        write_ome_ngff_metadata(
+            group=new_channel_group,
+            arr_shape=dataset_shape,
+            image_name=stack_name,
+            n_lvls=n_lvls,
+            scale_factors=scale_factor,
+            voxel_size=voxel_size,
+            channel_names=[channel_name],
+            channel_colors=channel_colors,
+            channel_minmax=channel_minmax,
+            channel_startend=channel_startend,
+            metadata=_get_pyramid_metadata(),
+            final_chunksize=final_chunksize,
+        )
+
+        # performance_report_path = f"{output_path}/report_{stack_name}.html"
+
+        # Writing zarr and performance report
+        # with performance_report(filename=performance_report_path):
+        logger.info(f"Writing channel {channel_name}/{stack_name}")
+
+        # Writing first multiscale by default
+        pyramid_group = new_channel_group.create_dataset(
+            name="0",
+            shape=dataset_shape,
+            chunks=final_chunksize,
+            dtype=czi.dtype,
+            compressor=writing_options,
+            dimension_separator="/",
+            overwrite=True,
+        )
+
+        # final_chunksize must be TCZYX order
+        for block, axis_area in czi_block_generator(
+            czi,
+            axis_jumps=final_chunksize[-3],
+            slice_axis="z",
+        ):
+            region = (
+                slice(None),
+                slice(None),
+                axis_area,
+                slice(0, dataset_shape[-2]),
+                slice(0, dataset_shape[-1]),
+            )
+            pyramid_group[region] = pad_array_n_d(block)
+
+        # Writing multiscales
+        previous_scale = da.from_zarr(pyramid_group, pyramid_group.chunks)
+        written_pyramid.append(previous_scale)
+
+        block_shape = list(
+            BlockedArrayWriter.get_block_shape(
+                arr=previous_scale,
+                target_size_mb=target_size_mb,
+                chunks=final_chunksize,
+            )
+        )
+        block_shape = extra_axes + tuple(block_shape)
+
+        for level in range(1, n_lvls):
             previous_scale = da.from_zarr(pyramid_group, pyramid_group.chunks)
             new_scale_factor = (
                 [1] * (len(previous_scale.shape) - len(scale_factor))
@@ -534,27 +565,28 @@ def czi_stack_zarr_writer(
             previous_scale_pyramid, _ = compute_pyramid(
                 data=previous_scale,
                 scale_axis=new_scale_factor,
-                chunks=image_data.chunksize,
+                chunks=final_chunksize,
                 n_lvls=2,
             )
             array_to_write = previous_scale_pyramid[-1]
 
-        logger.info(f"[level {level}]: pyramid level: {array_to_write}")
+            logger.info(
+                f"[level {level}]: pyramid level: {array_to_write.shape}"
+            )
 
-        # Create the scale dataset
-        pyramid_group = new_channel_group.create_dataset(
-            name=level,
-            shape=array_to_write.shape,
-            chunks=array_to_write.chunksize,
-            dtype=array_to_write.dtype,
-            compressor=writing_options,
-            dimension_separator="/",
-            overwrite=True,
-        )
-
-        # Block Zarr Writer
-        BlockedArrayWriter.store(array_to_write, pyramid_group, block_shape)
-        written_pyramid.append(array_to_write)
+            pyramid_group = new_channel_group.create_dataset(
+                name=str(level),
+                shape=array_to_write.shape,
+                chunks=final_chunksize,
+                dtype=array_to_write.dtype,
+                compressor=writing_options,
+                dimension_separator="/",
+                overwrite=True,
+            )
+            BlockedArrayWriter.store(
+                array_to_write, pyramid_group, block_shape
+            )
+            written_pyramid.append(array_to_write)
 
     end_time = time.time()
     logger.info(f"Time to write the dataset: {end_time - start_time}")
@@ -568,43 +600,25 @@ def example():
     """
     from pathlib import Path
 
-    import bioio_czi
-    import dask.array as da
-    from bioio import BioImage
-
-    czi_test_stack = Path(
-        "/Users/camilo.laiton/repositories/Protein/Gel1_Z2_CRTX_L3_cellanddendrites2_z-stack.czi"
-    )
+    czi_test_stack = Path("/path/to/data/data/tiles_test/488_large.czi")
 
     if czi_test_stack.exists():
-        czi_file_reader = BioImage(
-            str(czi_test_stack), reader=bioio_czi.Reader
-        )
-
-        print("Dask data: ", czi_file_reader.dask_data)
-        print("shape: ", czi_file_reader.shape)
-        print("dims: ", czi_file_reader.dims)
-        print("metadata: ", czi_file_reader.metadata)
-        print("channel_names: ", czi_file_reader.channel_names)
-        print("physical_pixel_sizes: ", czi_file_reader.physical_pixel_sizes)
-
         writing_opts = create_czi_opts(codec="zstd", compression_level=3)
 
-        lazy_data = da.squeeze(czi_file_reader.dask_data)
         # for channel_name in
-        for i, chn_name in enumerate(czi_file_reader.channel_names):
-            czi_stack_zarr_writer(
-                image_data=lazy_data[i],
-                output_path=f"./{czi_test_stack.stem}",
-                voxel_size=list(czi_file_reader.physical_pixel_sizes),
-                final_chunksize=[128, 128, 128],
-                scale_factor=[2, 2, 2],
-                n_lvls=4,
-                channel_name=czi_test_stack.stem,
-                logger=logging.Logger(name="test"),
-                stack_name=f"{chn_name}.zarr",
-                writing_options=writing_opts["compressor"],
-            )
+        # for i, chn_name in enumerate(czi_file_reader.channel_names):
+        czi_stack_zarr_writer(
+            czi_path=str(czi_test_stack),
+            output_path=f"./{czi_test_stack.stem}",
+            voxel_size=[1.0, 1.0, 1.0],
+            final_chunksize=[128, 128, 128],
+            scale_factor=[2, 2, 2],
+            n_lvls=4,
+            channel_name=czi_test_stack.stem,
+            logger=logging.Logger(name="test"),
+            stack_name="test_conversion_czi_package.zarr",
+            writing_options=writing_opts["compressor"],
+        )
 
     else:
         print(f"File does not exist: {czi_test_stack}")

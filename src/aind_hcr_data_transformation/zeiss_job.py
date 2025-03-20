@@ -2,27 +2,23 @@
 
 import logging
 import os
-import re
 import shutil
 import sys
 from pathlib import Path
 from time import time
 from typing import Any, List, Optional
 
-import bioio_czi
-import dask.array as da
 from aind_data_transformation.core import GenericEtl, JobResponse, get_parser
-from bioio import BioImage
 from numcodecs.blosc import Blosc
 
-from aind_protein_data_transformation.compress.czi_to_zarr import (
+from aind_hcr_data_transformation.compress.czi_to_zarr import (
     czi_stack_zarr_writer,
 )
-from aind_protein_data_transformation.models import (
+from aind_hcr_data_transformation.models import (
     CompressorName,
     ZeissJobSettings,
 )
-from aind_protein_data_transformation.utils import utils
+from aind_hcr_data_transformation.utils import utils
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "WARNING"))
 
@@ -115,51 +111,37 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
 
         """
         compressor = self._get_compressor()
-        # TODO: Coordinate with Carson Berry to make it compatible with Z1 uploads
 
-        # acquisition_path = Path(self.job_settings.input_source).joinpath(
-        #     "acquisition.json"
-        # )
-        # voxel_size_zyx = self._get_voxel_resolution(
-        #     acquisition_path=acquisition_path
-        # )
+        root_path = Path(self.job_settings.input_source).parent
+        root_name = root_path.stem
+        acquisition_path = root_path.joinpath("acquisition.json")
+        voxel_size_zyx = self._get_voxel_resolution(
+            acquisition_path=acquisition_path
+        )
 
         for stack in stacks_to_process:
             logging.info(f"Converting {stack}")
-            stack_name = stack.name
-            root_name = stack.parent.name
-
-            match = re.match(r"(.+)\((\d+)\)\.czi", stack_name)
-
-            if match:
-                base_name, number = match.groups()
-                stack_name = f"{base_name}_{number}"
-
-            else:
-                stack_name = f"{stack_name}_0"
+            stack_name = stack.stem
 
             output_path = Path(self.job_settings.output_directory).joinpath(
                 root_name
             )
 
-            czi_file_reader = BioImage(str(stack), reader=bioio_czi.Reader)
-
-            voxel_size_zyx = czi_file_reader.physical_pixel_sizes
-            voxel_size_zyx = [
-                voxel_size_zyx.Z,
-                voxel_size_zyx.Y,
-                voxel_size_zyx.X,
-            ]
-            delayed_stack = da.squeeze(czi_file_reader.dask_data)
+            # voxel_size_zyx = czi_file_reader.physical_pixel_sizes
+            # voxel_size_zyx = [
+            #     voxel_size_zyx.Z,
+            #     voxel_size_zyx.Y,
+            #     voxel_size_zyx.X,
+            # ]
 
             msg = (
                 f"Voxel resolution ZYX {voxel_size_zyx} for {stack} "
-                f"with name {stack_name} - {delayed_stack} - output: {output_path}"
+                f"with name {stack_name} - output: {output_path}"
             )
             logging.info(msg)
 
             czi_stack_zarr_writer(
-                image_data=delayed_stack,
+                czi_path=str(stack),
                 output_path=output_path,
                 voxel_size=voxel_size_zyx,
                 final_chunksize=self.job_settings.chunk_size,
@@ -169,6 +151,7 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
                 stack_name=f"{stack_name}.ome.zarr",
                 logger=logging,
                 writing_options=compressor,
+                target_size_mb=self.job_settings.target_size_mb,
             )
 
             if self.job_settings.s3_location is not None:
@@ -225,10 +208,9 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
 
         partitioned_list = self._get_partitioned_list_of_stack_paths()
 
-        # TODO: Coordinate with Carson Berry to upload derivatives folder
         # Upload derivatives folder
-        # if self.job_settings.partition_to_process == 0:
-        #     self._upload_derivatives_folder()
+        if self.job_settings.partition_to_process == 0:
+            self._upload_derivatives_folder()
 
         stacks_to_process = partitioned_list[
             self.job_settings.partition_to_process
@@ -255,7 +237,7 @@ def job_entrypoint(sys_args: list):
     else:
         # Construct settings from env vars
         job_settings = ZeissJobSettings()
-    job = ZeissJobSettings(job_settings=job_settings)
+    job = ZeissCompressionJob(job_settings=job_settings)
     job_response = job.run_job()
     logging.info(job_response.model_dump_json())
 
