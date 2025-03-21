@@ -21,7 +21,9 @@ class ZeissCompressionTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         """Setup basic job settings and job that can be used across tests"""
-        cls.raw_data_folder = tempfile.mkdtemp(prefix="unittest_")
+        cls.raw_data_folder = Path(tempfile.mkdtemp(prefix="unittest_"))
+        cls.raw_data_folder = cls.raw_data_folder.joinpath("SPIM")
+        cls.raw_data_folder.mkdir()
 
         cls.n_dummy_czis = 11
         # Create dummy .czi files
@@ -30,7 +32,7 @@ class ZeissCompressionTest(unittest.TestCase):
             file_path.touch()  # Creates an empty file
 
         basic_job_settings = ZeissJobSettings(
-            input_source=Path(cls.raw_data_folder),
+            input_source=Path(cls.raw_data_folder).parent,
             output_directory="fake_output_dir",
             num_of_partitions=4,
             partition_to_process=0,
