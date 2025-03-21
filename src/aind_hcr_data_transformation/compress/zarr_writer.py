@@ -41,8 +41,8 @@ def _closer_to_target(
         target_bytes: the target size for the returned shape
         itemsize: number of bytes per array element
     """
-    size1 = _get_size(shape1, itemsize)
-    size2 = _get_size(shape2, itemsize)
+    size1 = float(_get_size(shape1, itemsize))
+    size2 = float(_get_size(shape2, itemsize))
     if abs(size1 - target_bytes) < abs(size2 - target_bytes):
         return shape1
     return shape2

@@ -46,7 +46,9 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
         """
         all_stack_paths = []
         total_counter = 0
-        for p in Path(self.job_settings.input_source).glob("*.czi"):
+        for p in (
+            Path(self.job_settings.input_source).joinpath("SPIM").glob("*.czi")
+        ):
             if p.is_file():
                 total_counter += 1
                 all_stack_paths.append(p)
@@ -110,29 +112,29 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
         None
 
         """
+
+        if not len(stacks_to_process):
+            logging.info("No stacks to process!")
+            return
+
         compressor = self._get_compressor()
 
-        root_path = Path(self.job_settings.input_source).parent
-        root_name = root_path.stem
-        acquisition_path = root_path.joinpath("acquisition.json")
+        # Acquisition path in root folder
+        acquisition_path = self.job_settings.input_source.joinpath(
+            "acquisition.json"
+        )
+
+        # Getting voxel resolution
         voxel_size_zyx = self._get_voxel_resolution(
             acquisition_path=acquisition_path
         )
 
+        # Converting CZI tiles to Multiscale OMEZarr
         for stack in stacks_to_process:
             logging.info(f"Converting {stack}")
             stack_name = stack.stem
 
-            output_path = Path(self.job_settings.output_directory).joinpath(
-                root_name
-            )
-
-            # voxel_size_zyx = czi_file_reader.physical_pixel_sizes
-            # voxel_size_zyx = [
-            #     voxel_size_zyx.Z,
-            #     voxel_size_zyx.Y,
-            #     voxel_size_zyx.X,
-            # ]
+            output_path = Path(self.job_settings.output_directory)
 
             msg = (
                 f"Voxel resolution ZYX {voxel_size_zyx} for {stack} "
@@ -157,7 +159,7 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
             if self.job_settings.s3_location is not None:
                 channel_zgroup_file = output_path / ".zgroup"
                 s3_channel_zgroup_file = (
-                    f"{self.job_settings.s3_location}/{root_name}/.zgroup"
+                    f"{self.job_settings.s3_location}/.zgroup"
                 )
                 logging.info(
                     f"Uploading {channel_zgroup_file} to "
@@ -169,7 +171,7 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
                 ome_zarr_stack_name = f"{stack_name}.ome.zarr"
                 ome_zarr_stack_path = output_path.joinpath(ome_zarr_stack_name)
                 s3_stack_dir = (
-                    f"{self.job_settings.s3_location}/{root_name}/"
+                    f"{self.job_settings.s3_location}/"
                     f"{ome_zarr_stack_name}"
                 )
                 logging.info(
@@ -206,6 +208,7 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
         """Main entrypoint to run the job."""
         job_start_time = time()
 
+        # Reading data within the SPIM folder
         partitioned_list = self._get_partitioned_list_of_stack_paths()
 
         # Upload derivatives folder
