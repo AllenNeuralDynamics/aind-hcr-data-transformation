@@ -21,8 +21,8 @@ dependencies = [
     'zarr==2.18.2',
     'dask[distributed]==2024.8.0',
     'xarray_multiscale==1.1.0',
-    'czifile==2019.7.2.1',
     'natsort==8.4.0',
+    'czifile==2019.7.2.1',
     'ome-zarr',
     'awscli'
 ]
