@@ -499,7 +499,9 @@ def czi_block_generator(
     subblock_directory = czi_decriptor.filtered_subblock_directory
 
     # Sorting indices so planes are ordered
-    ordered_subblock_directory = natsorted(subblock_directory, key=lambda sb: sb.start[axis_index])
+    ordered_subblock_directory = natsorted(
+        subblock_directory, key=lambda sb: sb.start[axis_index]
+    )
 
     jumps = generate_jumps(axis_shape, axis_jumps)
     n_jumps = len(jumps)
