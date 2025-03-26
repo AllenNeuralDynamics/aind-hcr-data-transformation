@@ -12,6 +12,7 @@ from typing import List, Optional
 
 import numpy as np
 from czifile.czifile import create_output
+from natsort import natsorted
 
 from aind_hcr_data_transformation.models import ArrayLike, PathLike
 
@@ -282,6 +283,7 @@ def parallel_reader(
 
 def read_slices_czi(
     czi_stream,
+    subblock_directory: List,
     start_slice: int,
     end_slice: int,
     slice_axis: Optional[str] = "z",
@@ -299,6 +301,9 @@ def read_slices_czi(
     ----------
     czi_stream
         Opened CZI file decriptor.
+
+    subblock_directory: List
+        List of subblock directories. These must be ordered.
 
     start_slice: int
         Start slice from where the data will be pulled.
@@ -339,7 +344,7 @@ def read_slices_czi(
         list(czi_stream.axes.lower()),
     )
     nominal_start = np.array(czi_stream.start)
-    subblock_directory = czi_stream.filtered_subblock_directory
+
     len_dir = len(subblock_directory)
 
     validate_slices(start_slice, end_slice, len_dir)
@@ -491,17 +496,25 @@ def czi_block_generator(
         czi_decriptor.shape, czi_decriptor.axes, slice_axis
     )
 
+    subblock_directory = czi_decriptor.filtered_subblock_directory
+
+    # Sorting indices so planes are ordered
+    ordered_subblock_directory = natsorted(
+        subblock_directory, key=lambda sb: sb.start[axis_index]
+    )
+
     jumps = generate_jumps(axis_shape, axis_jumps)
     n_jumps = len(jumps)
     for i, start_slice in enumerate(jumps):
         if i + 1 < n_jumps:
-            end_slice = jumps[i + 1] - 1
+            end_slice = jumps[i + 1]
 
         else:
             end_slice = axis_shape
 
         block = read_slices_czi(
             czi_decriptor,
+            subblock_directory=ordered_subblock_directory,
             start_slice=start_slice,
             end_slice=end_slice,
             slice_axis=slice_axis,
