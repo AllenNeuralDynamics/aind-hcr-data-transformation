@@ -600,7 +600,7 @@ def example():
     """
     from pathlib import Path
 
-    czi_test_stack = Path("/path/to/data/data/tiles_test/488_large.czi")
+    czi_test_stack = Path("path/to/data/tiles_test/SPIM/488_large.czi")
 
     if czi_test_stack.exists():
         writing_opts = create_czi_opts(codec="zstd", compression_level=3)
