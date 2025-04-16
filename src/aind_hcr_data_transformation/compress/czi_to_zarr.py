@@ -6,37 +6,32 @@ to zarr.
 """
 
 import asyncio
+import json
 import logging
+import multiprocessing
 import os
 import time
 from typing import (
-    Any,
     Dict,
-    Hashable,
     List,
     Optional,
-    Sequence,
     Tuple,
-    TypeAlias,
-    Union,
     cast,
 )
 
+import boto3
 import czifile
 import dask
-import dask.array as da
 import numpy as np
 import tensorstore as ts
 import xarray_multiscale
 import zarr
 from ome_zarr.format import CurrentFormat
 from ome_zarr.writer import (
-    AxesType,
     Format,
     JSONDict,
     _get_valid_axes,
     _validate_datasets,
-    write_multiscales_metadata,
 )
 
 from aind_hcr_data_transformation.utils.utils import (
@@ -195,6 +190,7 @@ async def create_downsample_dataset(
     dataset_path: str,
     start_scale: int,
     downsample_factor: list,
+    compressor_kwargs: dict,
     cpu_cnt: int = None,
     aws_region: str = "us-west-2",
     bucket_name: str = None,
@@ -211,6 +207,8 @@ async def create_downsample_dataset(
         The scale level to downsample from (e.g., 0 for original resolution).
     downsample_factor : list of int
         Downsampling factor for each of [t, c, z, y, x] dimensions.
+    compressor_kwargs: Dict
+        Blosc compressor arguments for tensorstore
     cpu_cnt : int, optional
         Number of threads to use. If None, uses all available CPUs.
     aws_region : str, optional
@@ -276,12 +274,12 @@ async def create_downsample_dataset(
     ]
 
     # Creates downsample spec
-    # Keeping chunksize equal in all dimensions, however it might be
+    # Keeping chunk_size equal in all dimensions, however it might be
     # suboptimal? We might want to have chunks of ~50-100 MB
     down_spec = create_spec(
         output_path=dataset_path,
         data_shape=downsampled_dataset.shape,
-        data_dtype=str(source_dataset.dtype),
+        data_dtype=source_dataset.dtype.name,
         shard_shape=source_dataset.chunk_layout.write_chunk.shape,
         chunk_shape=source_dataset.chunk_layout.read_chunk.shape,
         zyx_resolution=downsampled_resolution,
@@ -289,6 +287,7 @@ async def create_downsample_dataset(
         cpu_cnt=cpu_cnt,
         aws_region=aws_region,
         bucket_name=bucket_name,
+        compressor_kwargs=compressor_kwargs,
     )
 
     down_dataset = await ts.open(down_spec)
@@ -366,18 +365,10 @@ def _build_ome(
             }
         )
 
-    omero = {
-        "id": 1,  # ID in OMERO
-        "name": image_name,  # Name as shown in the UI
-        "version": "0.4",  # Current version
+    ome = {
         "channels": ch,
-        "rdefs": {
-            "defaultT": 0,  # First timepoint to show the user
-            "defaultZ": data_shape[2] // 2,  # First Z section to show the user
-            "model": "color",  # "color" or "greyscale"
-        },
     }
-    return omero
+    return ome
 
 
 def _compute_scales(
@@ -503,19 +494,22 @@ def _get_axes_5d(
     return axes_5d
 
 
-def write_multiscales_metadata(
-    group: zarr.Group,
+def add_multiscales_metadata(
+    group: dict,
     datasets: list[dict],
     fmt: Format = CurrentFormat(),
-    axes: AxesType = None,
+    axes=None,
     name: str | None = None,
+    omero_metadata: Dict | None = None,
     **metadata: str | JSONDict | list[JSONDict],
 ) -> None:
     """
     Write the multiscales metadata in the group.
+    Check the schema of OME-NGFF 0.5:
+    https://ngff.openmicroscopy.org/0.5/schemas/image.schema
 
-    :type group: :class:`zarr.Group`
-    :param group: The group within the zarr store to write the metadata in.
+    :type group: dict
+    :param group: Dictionary that will be used to write the zarr.json.
     :type datasets: list of dicts
     :param datasets:
       The list of datasets (dicts) for this multiscale image.
@@ -530,25 +524,16 @@ def write_multiscales_metadata(
       The names of the axes. e.g. ["t", "c", "z", "y", "x"].
       Ignored for versions 0.1 and 0.2. Required for version 0.3 or greater.
     """
-
     ndim = -1
     if axes is not None:
         if fmt.version in ("0.1", "0.2"):
-            LOGGER.info("axes ignored for version 0.1 or 0.2")
+            print("axes ignored for version 0.1 or 0.2")
             axes = None
         else:
             axes = _get_valid_axes(axes=axes, fmt=fmt)
             if axes is not None:
                 ndim = len(axes)
-    if (
-        isinstance(metadata, dict)
-        and metadata.get("metadata")
-        and isinstance(metadata["metadata"], dict)
-        and "omero" in metadata["metadata"]
-    ):
-        omero_metadata = metadata["metadata"].get("omero")
-        if omero_metadata is None:
-            raise KeyError("If `'omero'` is present, value cannot be `None`.")
+    if omero_metadata:
         for c in omero_metadata["channels"]:
             if "color" in c:
                 if not isinstance(c["color"], str) or len(c["color"]) != 6:
@@ -562,29 +547,28 @@ def write_multiscales_metadata(
                     if not isinstance(c["window"][p], (int, float)):
                         raise TypeError(f"`'{p}'` must be an int or float.")
 
-        group.attrs["omero"] = omero_metadata
-
     # note: we construct the multiscale metadata via dict(), rather than {}
     # to avoid duplication of protected keys like 'version' in **metadata
     # (for {} this would silently over-write it, with dict() it explicitly fails)
     multiscales = [
         dict(
-            version=fmt.version,
+            name=name or group.get("name"),
+            axes=axes,
             datasets=_validate_datasets(datasets, ndim, fmt),
-            name=name or group.name,
+            type="mode",
             **metadata,
         )
     ]
-    if axes is not None:
-        multiscales[0]["axes"] = axes
 
-    group.attrs["multiscales"] = multiscales
+    group["attributes"]["ome"]["multiscales"] = multiscales
+    group["attributes"]["ome"]["omero"] = omero_metadata
+
+    return group
 
 
 def write_ome_ngff_metadata(
-    group: zarr.Group,
     arr_shape: List[int],
-    chunksize: List[int],
+    chunk_size: List[int],
     image_name: str,
     n_lvls: int,
     scale_factors: tuple,
@@ -600,8 +584,6 @@ def write_ome_ngff_metadata(
 
     Parameters
     ----------
-    group : zarr.Group
-        The output Zarr group.
     arr_shape : List[int]
         List of ints with the dataset shape.
     image_name : str
@@ -627,12 +609,18 @@ def write_ome_ngff_metadata(
     metadata: dict
         Extra metadata to write in the OME-NGFF metadata
     """
+    group = dict(
+        zarr_format=3,
+        node_type="group",
+        attributes={},
+    )
+
     if metadata is None:
         metadata = {}
     fmt = CurrentFormat()
 
     # Building the OMERO metadata
-    ome_json = _build_ome(
+    omero_metadata = _build_ome(
         arr_shape,
         image_name,
         channel_names=channel_names,
@@ -640,10 +628,9 @@ def write_ome_ngff_metadata(
         channel_minmax=channel_minmax,
         channel_startend=channel_startend,
     )
-    group.attrs["omero"] = ome_json
     axes_5d = _get_axes_5d()
     coordinate_transformations, chunk_opts = _compute_scales(
-        n_lvls, scale_factors, voxel_size, chunksize, arr_shape, None
+        n_lvls, scale_factors, voxel_size, chunk_size, arr_shape, None
     )
     fmt.validate_coordinate_transformations(
         len(arr_shape), n_lvls, coordinate_transformations
@@ -654,8 +641,20 @@ def write_ome_ngff_metadata(
         for dataset, transform in zip(datasets, coordinate_transformations):
             dataset["coordinateTransformations"] = transform
 
+    group["attributes"]["ome"] = {"version": "0.5"}
+
     # Writing the multiscale metadata
-    write_multiscales_metadata(group, datasets, fmt, axes_5d, **metadata)
+    group = add_multiscales_metadata(
+        group=group,
+        datasets=datasets,
+        fmt=fmt,
+        axes=axes_5d,
+        name=image_name,
+        omero_metadata=omero_metadata,
+        **metadata,
+    )
+
+    return group
 
 
 def _get_pyramid_metadata():
@@ -676,17 +675,59 @@ def _get_pyramid_metadata():
     }
 
 
+def write_multiscale_json(
+    output_path: str,
+    json_data: dict,
+    bucket_name: Optional[str] = None,
+):
+    """
+    Writes the multiscale json in the top
+    level directory of the zarr.
+
+    Parameters
+    ----------
+    output_path: str
+        Output path where we want the json
+
+    json_data: dict
+        Dictionary with the zarr.json metadata.
+
+    bucket_name: Optional[str]
+        Path where we want to store the json in s3.
+        If default is None, the file will be saved
+        locally. Default: None
+
+    """
+    json_key = f"{output_path}/zarr.json"
+    if bucket_name:
+        s3 = boto3.client("s3")
+
+        # Upload the JSON string as a file to S3
+        s3.put_object(
+            Bucket=bucket_name,
+            Key=json_key,
+            Body=json.dumps(json_data, indent=2),
+            ContentType="application/json",
+        )
+
+    else:
+        with open(json_key, "w") as fp:
+            json.dump(json_data, fp, indent=2)
+
+
 def czi_stack_zarr_writer(
     czi_path: str,
     output_path: str,
     voxel_size: List[float],
-    shardsize: List[int],
-    chunksize: List[int],
+    shard_size: List[int],
+    chunk_size: List[int],
     scale_factor: List[int],
     n_lvls: int,
     channel_name: str,
     logger: logging.Logger,
     stack_name: str,
+    compressor_kwargs: dict,
+    bucket_name: Optional[str] = None,
 ):
     """
     Writes a fused Zeiss channel in OMEZarr
@@ -704,8 +745,8 @@ def czi_stack_zarr_writer(
     voxel_size: List[float]
         Voxel size representing the dataset
 
-    chunksize: List[int]
-        Final chunksize we want to use to write
+    chunk_size: List[int]
+        Final chunk_size we want to use to write
         the final dataset
 
     codec: str
@@ -728,6 +769,8 @@ def czi_stack_zarr_writer(
     logger: logging.Logger
         Logger object
 
+    compressor_kwargs: Dict
+        Blosc compressor arguments for tensorstore
     """
     written_pyramid = []
     start_time = time.time()
@@ -737,8 +780,8 @@ def czi_stack_zarr_writer(
         extra_axes = (1,) * (5 - len(dataset_shape))
         dataset_shape = extra_axes + dataset_shape
 
-        shardsize = ([1] * (5 - len(chunksize))) + chunksize
-        chunksize = ([1] * (5 - len(chunksize))) + chunksize
+        shard_size = ([1] * (5 - len(shard_size))) + shard_size
+        chunk_size = ([1] * (5 - len(chunk_size))) + chunk_size
 
         # Getting channel color
         channel_colors = None
@@ -768,8 +811,7 @@ def czi_stack_zarr_writer(
         channel_startend = [(0.0, 550.0) for _ in range(dataset_shape[1])]
 
         # Writing OME-NGFF metadata
-        write_ome_ngff_metadata(
-            group=new_channel_group,
+        multiscale_zarr_json = write_ome_ngff_metadata(
             arr_shape=dataset_shape,
             image_name=stack_name,
             n_lvls=n_lvls,
@@ -780,7 +822,7 @@ def czi_stack_zarr_writer(
             channel_minmax=channel_minmax,
             channel_startend=channel_startend,
             metadata=_get_pyramid_metadata(),
-            chunksize=chunksize,
+            chunk_size=chunk_size,
         )
 
         # Full resolution spec
@@ -788,8 +830,8 @@ def czi_stack_zarr_writer(
             output_path=output_path,
             data_shape=dataset_shape,
             data_dtype=czi.dtype.name,
-            shard_shape=shardsize,
-            chunk_shape=chunksize,
+            shard_shape=shard_size,
+            chunk_shape=chunk_size,
             zyx_resolution=voxel_size,
             compressor_kwargs=compressor_kwargs,
         )
@@ -797,10 +839,10 @@ def czi_stack_zarr_writer(
         tasks = []
         dataset = ts.open(spec).result()
 
-        # chunksize must be TCZYX order
+        # shard size must be TCZYX order
         for block, axis_area in czi_block_generator(
             czi,
-            axis_jumps=chunksize[-3],
+            axis_jumps=shard_size[-3],
             slice_axis="z",
         ):
             region = (
@@ -823,8 +865,16 @@ def czi_stack_zarr_writer(
                     dataset_path=output_path,
                     start_scale=level,
                     downsample_factor=scale_factor,
+                    compressor_kwargs=compressor_kwargs,
                 )
             )
+
+    # Writes top level json
+    write_multiscale_json(
+        bucket_name=bucket_name,
+        output_path=output_path,
+        json_data=multiscale_zarr_json,
+    )
 
     end_time = time.time()
     logger.info(f"Time to write the dataset: {end_time - start_time}")
@@ -844,22 +894,26 @@ def example():
     )
 
     if czi_test_stack.exists():
-        writing_opts = create_czi_opts(codec="zstd", compression_level=3)
         start_time = time.time()
 
         # for channel_name in
         # for i, chn_name in enumerate(czi_file_reader.channel_names):
         czi_stack_zarr_writer(
             czi_path=str(czi_test_stack),
-            output_path=f"./{czi_test_stack.stem}",
+            output_path=f"{czi_test_stack.stem}",
             voxel_size=[1.0, 1.0, 1.0],
-            chunksize=[128, 128, 128],
+            shard_size=[512, 512, 512],
+            chunk_size=[128, 128, 128],
             scale_factor=[2, 2, 2],
-            n_lvls=4,
+            n_lvls=3,
             channel_name=czi_test_stack.stem,
             logger=logging.Logger(name="test"),
             stack_name="test_conversion_czi_package.zarr",
-            writing_options=writing_opts["compressor"],
+            compressor_kwargs={
+                "cname": "zstd",
+                "clevel": 3,
+                "shuffle": "shuffle",
+            },
         )
         end_time = time.time()
         print(f"Conversion time: {end_time - start_time} s")
