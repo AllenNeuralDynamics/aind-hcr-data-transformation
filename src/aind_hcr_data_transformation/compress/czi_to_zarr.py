@@ -5,28 +5,308 @@ stacks are loaded into memory and written
 to zarr.
 """
 
+import asyncio
 import logging
+import os
 import time
-from typing import Dict, Hashable, List, Optional, Sequence, Tuple, Union, cast
+from typing import (
+    Any,
+    Dict,
+    Hashable,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    TypeAlias,
+    Union,
+    cast,
+)
 
 import czifile
 import dask
 import dask.array as da
 import numpy as np
+import tensorstore as ts
 import xarray_multiscale
 import zarr
-from numcodecs import blosc
 from ome_zarr.format import CurrentFormat
-from ome_zarr.io import parse_url
-from ome_zarr.writer import write_multiscales_metadata
-
-from aind_hcr_data_transformation.compress.zarr_writer import (
-    BlockedArrayWriter,
+from ome_zarr.writer import (
+    AxesType,
+    Format,
+    JSONDict,
+    _get_valid_axes,
+    _validate_datasets,
+    write_multiscales_metadata,
 )
+
 from aind_hcr_data_transformation.utils.utils import (
     czi_block_generator,
     pad_array_n_d,
 )
+
+
+def create_spec(
+    output_path: str,
+    data_shape: list,
+    data_dtype: str,
+    shard_shape: list,
+    chunk_shape: list,
+    zyx_resolution: list,
+    compressor_kwargs: dict,
+    scale: str = "0",
+    cpu_cnt: int = None,
+    aws_region: str = "us-west-2",
+    bucket_name: str = None,
+    aws_profile: str = "default",
+    credentials_file: str = "~/.aws/credentials",
+    read_cache_bytes: int = 1 << 30,
+) -> dict:
+    """
+    Create a TensorStore Zarr v3 specification for writing to an S3-backed dataset.
+
+    Parameters
+    ----------
+    output_path : str
+        Path inside the S3 bucket where the dataset will be stored.
+    data_shape : list of int
+        Shape of the full dataset in [t, c, z, y, x] order.
+    data_dtype : str
+        Data type of the dataset (e.g., 'uint16', 'float32').
+    shard_shape : list of int
+        Shape of the sharded outer chunks.
+    chunk_shape : list of int
+        Shape of the internal compressed chunks inside each shard.
+    zyx_resolution : list
+        Spatial resolution in microns for the z, y, x axes.
+    compressor_kwargs: dict
+        Compressor parameters for tensorstore
+    scale : str, optional
+        Scale level identifier (e.g., "0", "1", etc.). Default is "0".
+    cpu_cnt : int, optional
+        Number of CPU threads to use. Defaults to the number of system CPUs.
+    aws_region : str, optional
+        AWS region where the S3 bucket resides. Default is "us-west-2".
+    bucket_name : str, optional
+        Name of the S3 bucket. Default is "aind-msma-morphology-data".
+    aws_profile : str, optional
+        AWS CLI profile to use for authentication. Default is "default".
+    credentials_file : str, optional
+        Path to AWS credentials file. Default is "~/.aws/credentials".
+    read_cache_bytes : int, optional
+        Size of the read cache pool in bytes. Default is 1GB.
+
+    Returns
+    -------
+    spec : dict
+        TensorStore specification dictionary to create a new Zarr v3 dataset.
+    """
+    if cpu_cnt is None:
+        cpu_cnt = multiprocessing.cpu_count()
+
+    zyx_resolution = [
+        f"{r}um" if r is not None else None for r in zyx_resolution
+    ]
+    zyx_resolution = [None] * (5 - len(zyx_resolution)) + zyx_resolution
+
+    kvstore_dict = {
+        "driver": "file",
+    }
+
+    if bucket_name is not None:
+        kvstore_dict = {
+            "driver": "s3",
+            "bucket": bucket_name,
+            "aws_region": aws_region,
+            "aws_credentials": {
+                "type": "profile",
+                "profile": aws_profile,
+                "credentials_file": os.path.expanduser(credentials_file),
+            },
+            "context": {
+                "cache_pool": {"total_bytes_limit": read_cache_bytes},
+                "data_copy_concurrency": {"limit": cpu_cnt},
+                "s3_request_concurrency": {"limit": cpu_cnt},
+                "experimental_s3_rate_limiter": {
+                    "read_rate": cpu_cnt,
+                    "write_rate": cpu_cnt,
+                },
+            },
+        }
+
+    return {
+        "driver": "zarr3",
+        "kvstore": {
+            **kvstore_dict,
+            "path": output_path,
+        },
+        "path": str(scale),
+        "recheck_cached_metadata": False,
+        "recheck_cached_data": False,
+        "metadata": {
+            "shape": data_shape,
+            "zarr_format": 3,
+            "node_type": "array",
+            "chunk_grid": {
+                "name": "regular",
+                "configuration": {"chunk_shape": shard_shape},
+            },
+            "chunk_key_encoding": {
+                "name": "default",
+                "configuration": {"separator": "/"},
+            },
+            "attributes": {
+                "dimension_units": zyx_resolution,
+            },
+            "dimension_names": ["t", "c", "z", "y", "x"],
+            "codecs": [
+                {
+                    "name": "sharding_indexed",
+                    "configuration": {
+                        "chunk_shape": chunk_shape,
+                        "codecs": [
+                            {
+                                "name": "bytes",
+                                "configuration": {"endian": "little"},
+                            },
+                            {
+                                "name": "blosc",
+                                "configuration": compressor_kwargs,
+                            },
+                        ],
+                        "index_codecs": [
+                            {
+                                "name": "bytes",
+                                "configuration": {"endian": "little"},
+                            },
+                            {"name": "crc32c"},
+                        ],
+                        "index_location": "end",
+                    },
+                }
+            ],
+            "data_type": data_dtype,
+        },
+        "create": True,
+        "delete_existing": True,
+    }
+
+
+async def create_downsample_dataset(
+    dataset_path: str,
+    start_scale: int,
+    downsample_factor: list,
+    cpu_cnt: int = None,
+    aws_region: str = "us-west-2",
+    bucket_name: str = None,
+    read_cache_bytes: int = 1 << 30,
+):
+    """
+    Create a new downsampled scale level in a multi-scale Zarr v3 dataset.
+
+    Parameters
+    ----------
+    dataset_path : str
+        Base S3 path of the dataset inside the bucket.
+    start_scale : int
+        The scale level to downsample from (e.g., 0 for original resolution).
+    downsample_factor : list of int
+        Downsampling factor for each of [t, c, z, y, x] dimensions.
+    cpu_cnt : int, optional
+        Number of threads to use. If None, uses all available CPUs.
+    aws_region : str, optional
+        AWS region of the S3 bucket.
+    bucket_name : str, optional
+        S3 bucket name.
+    read_cache_bytes : int, optional
+        Size of the read cache pool in bytes. Default is 1GB.
+
+    Returns
+    -------
+    None
+        The function writes a new downsampled scale directly to the same Zarr dataset.
+    """
+    if cpu_cnt is None:
+        cpu_cnt = multiprocessing.cpu_count()
+
+    kvstore_dict = {
+        "driver": "file",
+    }
+
+    if bucket_name is not None:
+        kvstore_dict = {
+            "driver": "s3",
+            "bucket": bucket_name,
+            "aws_region": aws_region,
+            "context": {
+                "cache_pool": {"total_bytes_limit": read_cache_bytes},
+                "data_copy_concurrency": {"limit": cpu_cnt},
+                "s3_request_concurrency": {"limit": cpu_cnt},
+                "experimental_s3_rate_limiter": {
+                    "read_rate": cpu_cnt,
+                    "write_rate": cpu_cnt,
+                },
+            },
+        }
+
+    downsample_factor = [1] * (5 - len(downsample_factor)) + downsample_factor
+
+    source_w_down_spec = {
+        "driver": "downsample",
+        "downsample_factors": downsample_factor,
+        "downsample_method": "mean",
+        "base": {
+            "driver": "zarr3",
+            "kvstore": {
+                **kvstore_dict,
+                "path": dataset_path,
+            },
+            "path": str(start_scale),
+            "recheck_cached_metadata": False,
+            "recheck_cached_data": False,
+        },
+    }
+
+    downsampled_dataset = await ts.open(spec=source_w_down_spec)
+    source_dataset = downsampled_dataset.base
+    new_scale = start_scale + 1
+
+    downsampled_resolution = [
+        unit.multiplier if isinstance(unit, ts.Unit) else unit
+        for unit in downsampled_dataset.dimension_units
+    ]
+
+    # Creates downsample spec
+    # Keeping chunksize equal in all dimensions, however it might be
+    # suboptimal? We might want to have chunks of ~50-100 MB
+    down_spec = create_spec(
+        output_path=dataset_path,
+        data_shape=downsampled_dataset.shape,
+        data_dtype=str(source_dataset.dtype),
+        shard_shape=source_dataset.chunk_layout.write_chunk.shape,
+        chunk_shape=source_dataset.chunk_layout.read_chunk.shape,
+        zyx_resolution=downsampled_resolution,
+        scale=new_scale,
+        cpu_cnt=cpu_cnt,
+        aws_region=aws_region,
+        bucket_name=bucket_name,
+    )
+
+    down_dataset = await ts.open(down_spec)
+    downsampled_data = await downsampled_dataset.read()
+    await down_dataset.write(downsampled_data)
+
+
+async def write_tasks(list_of_tasks: List):
+    """
+    Gathers all the tensorstore tasks
+
+    Parameters
+    ----------
+    list_of_tasks: List
+        List of tensorstore tasks
+    """
+    # Wait for all tasks to complete
+    await asyncio.gather(*list_of_tasks)
 
 
 def _build_ome(
@@ -223,10 +503,88 @@ def _get_axes_5d(
     return axes_5d
 
 
+def write_multiscales_metadata(
+    group: zarr.Group,
+    datasets: list[dict],
+    fmt: Format = CurrentFormat(),
+    axes: AxesType = None,
+    name: str | None = None,
+    **metadata: str | JSONDict | list[JSONDict],
+) -> None:
+    """
+    Write the multiscales metadata in the group.
+
+    :type group: :class:`zarr.Group`
+    :param group: The group within the zarr store to write the metadata in.
+    :type datasets: list of dicts
+    :param datasets:
+      The list of datasets (dicts) for this multiscale image.
+      Each dict must include 'path' and a 'coordinateTransformations'
+      list for version 0.4 or later that must include a 'scale' transform.
+    :type fmt: :class:`ome_zarr.format.Format`, optional
+    :param fmt:
+      The format of the ome_zarr data which should be used.
+      Defaults to the most current.
+    :type axes: list of str or list of dicts, optional
+    :param axes:
+      The names of the axes. e.g. ["t", "c", "z", "y", "x"].
+      Ignored for versions 0.1 and 0.2. Required for version 0.3 or greater.
+    """
+
+    ndim = -1
+    if axes is not None:
+        if fmt.version in ("0.1", "0.2"):
+            LOGGER.info("axes ignored for version 0.1 or 0.2")
+            axes = None
+        else:
+            axes = _get_valid_axes(axes=axes, fmt=fmt)
+            if axes is not None:
+                ndim = len(axes)
+    if (
+        isinstance(metadata, dict)
+        and metadata.get("metadata")
+        and isinstance(metadata["metadata"], dict)
+        and "omero" in metadata["metadata"]
+    ):
+        omero_metadata = metadata["metadata"].get("omero")
+        if omero_metadata is None:
+            raise KeyError("If `'omero'` is present, value cannot be `None`.")
+        for c in omero_metadata["channels"]:
+            if "color" in c:
+                if not isinstance(c["color"], str) or len(c["color"]) != 6:
+                    raise TypeError("`'color'` must be a hex code string.")
+            if "window" in c:
+                if not isinstance(c["window"], dict):
+                    raise TypeError("`'window'` must be a dict.")
+                for p in ["min", "max", "start", "end"]:
+                    if p not in c["window"]:
+                        raise KeyError(f"`'{p}'` not found in `'window'`.")
+                    if not isinstance(c["window"][p], (int, float)):
+                        raise TypeError(f"`'{p}'` must be an int or float.")
+
+        group.attrs["omero"] = omero_metadata
+
+    # note: we construct the multiscale metadata via dict(), rather than {}
+    # to avoid duplication of protected keys like 'version' in **metadata
+    # (for {} this would silently over-write it, with dict() it explicitly fails)
+    multiscales = [
+        dict(
+            version=fmt.version,
+            datasets=_validate_datasets(datasets, ndim, fmt),
+            name=name or group.name,
+            **metadata,
+        )
+    ]
+    if axes is not None:
+        multiscales[0]["axes"] = axes
+
+    group.attrs["multiscales"] = multiscales
+
+
 def write_ome_ngff_metadata(
     group: zarr.Group,
     arr_shape: List[int],
-    final_chunksize: List[int],
+    chunksize: List[int],
     image_name: str,
     n_lvls: int,
     scale_factors: tuple,
@@ -285,7 +643,7 @@ def write_ome_ngff_metadata(
     group.attrs["omero"] = ome_json
     axes_5d = _get_axes_5d()
     coordinate_transformations, chunk_opts = _compute_scales(
-        n_lvls, scale_factors, voxel_size, final_chunksize, arr_shape, None
+        n_lvls, scale_factors, voxel_size, chunksize, arr_shape, None
     )
     fmt.validate_coordinate_transformations(
         len(arr_shape), n_lvls, coordinate_transformations
@@ -300,42 +658,16 @@ def write_ome_ngff_metadata(
     write_multiscales_metadata(group, datasets, fmt, axes_5d, **metadata)
 
 
-def create_czi_opts(codec: str, compression_level: int) -> dict:
-    """
-    Creates CZI options for writing
-    the OMEZarr.
-
-    Parameters
-    ----------
-    codec: str
-        Image codec used to write the image
-
-    compression_level: int
-        Compression level for the image
-
-    Returns
-    -------
-    dict
-        Dictionary with the blosc compression
-        to write the CZI image
-    """
-    return {
-        "compressor": blosc.Blosc(
-            cname=codec, clevel=compression_level, shuffle=blosc.SHUFFLE
-        )
-    }
-
-
 def _get_pyramid_metadata():
     """
     Gets the image pyramid metadata
-    using xarray_multiscale package
+    using tensorstore package
     """
     return {
         "metadata": {
-            "description": "Downscaling using the windowed mean",
-            "method": "xarray_multiscale.reducers.windowed_mean",
-            "version": str(xarray_multiscale.__version__),
+            "description": "Downscaling tensorstore downsample",
+            "method": "tensorstore.downsample",
+            "version": "0.1.72",
             "args": "[false]",
             # No extra parameters were used different
             # from the orig. array and scales
@@ -344,65 +676,17 @@ def _get_pyramid_metadata():
     }
 
 
-def compute_pyramid(
-    data: dask.array.core.Array,
-    n_lvls: int,
-    scale_axis: Tuple[int],
-    chunks: Union[str, Sequence[int], Dict[Hashable, int]] = "auto",
-) -> List[dask.array.core.Array]:
-    """
-    Computes the pyramid levels given an input full resolution image data
-
-    Parameters
-    ------------------------
-
-    data: dask.array.core.Array
-        Dask array of the image data
-
-    n_lvls: int
-        Number of downsampling levels
-        that will be applied to the original image
-
-    scale_axis: Tuple[int]
-        Scaling applied to each axis
-
-    chunks: Union[str, Sequence[int], Dict[Hashable, int]]
-        chunksize that will be applied to the multiscales
-        Default: "auto"
-
-    Returns
-    ------------------------
-
-    Tuple[List[dask.array.core.Array], Dict]:
-        List with the downsampled image(s) and dictionary
-        with image metadata
-    """
-
-    metadata = _get_pyramid_metadata()
-
-    pyramid = xarray_multiscale.multiscale(
-        array=data,
-        reduction=xarray_multiscale.reducers.windowed_mean,  # func
-        scale_factors=scale_axis,  # scale factors
-        preserve_dtype=True,
-        chunks=chunks,
-    )[:n_lvls]
-
-    return [pyramid_level.data for pyramid_level in pyramid], metadata
-
-
 def czi_stack_zarr_writer(
     czi_path: str,
     output_path: str,
     voxel_size: List[float],
-    final_chunksize: List[int],
+    shardsize: List[int],
+    chunksize: List[int],
     scale_factor: List[int],
     n_lvls: int,
     channel_name: str,
     logger: logging.Logger,
     stack_name: str,
-    writing_options,
-    target_size_mb: Optional[int] = 24000,
 ):
     """
     Writes a fused Zeiss channel in OMEZarr
@@ -420,7 +704,7 @@ def czi_stack_zarr_writer(
     voxel_size: List[float]
         Voxel size representing the dataset
 
-    final_chunksize: List[int]
+    chunksize: List[int]
         Final chunksize we want to use to write
         the final dataset
 
@@ -444,9 +728,6 @@ def czi_stack_zarr_writer(
     logger: logging.Logger
         Logger object
 
-    target_size_mb: Optional[int]
-        Target size to pull from the CZI array.
-
     """
     written_pyramid = []
     start_time = time.time()
@@ -456,18 +737,13 @@ def czi_stack_zarr_writer(
         extra_axes = (1,) * (5 - len(dataset_shape))
         dataset_shape = extra_axes + dataset_shape
 
-        final_chunksize = ([1] * (5 - len(final_chunksize))) + final_chunksize
+        shardsize = ([1] * (5 - len(chunksize))) + chunksize
+        chunksize = ([1] * (5 - len(chunksize))) + chunksize
+
         # Getting channel color
         channel_colors = None
 
         print(f"Writing {dataset_shape} from {stack_name} to {output_path}")
-
-        # Creating Zarr dataset
-        store = parse_url(path=output_path, mode="w").store
-        root_group = zarr.group(store=store)
-
-        # Using 1 thread since is in single machine.
-        # Avoiding the use of multithreaded due to GIL
 
         if np.issubdtype(czi.dtype, np.integer):
             np_info_func = np.iinfo
@@ -491,10 +767,6 @@ def czi_stack_zarr_writer(
         # not used that much on neuroglancer
         channel_startend = [(0.0, 550.0) for _ in range(dataset_shape[1])]
 
-        new_channel_group = root_group.create_group(
-            name=stack_name, overwrite=True
-        )
-
         # Writing OME-NGFF metadata
         write_ome_ngff_metadata(
             group=new_channel_group,
@@ -508,30 +780,27 @@ def czi_stack_zarr_writer(
             channel_minmax=channel_minmax,
             channel_startend=channel_startend,
             metadata=_get_pyramid_metadata(),
-            final_chunksize=final_chunksize,
+            chunksize=chunksize,
         )
 
-        # performance_report_path = f"{output_path}/report_{stack_name}.html"
-
-        # Writing zarr and performance report
-        # with performance_report(filename=performance_report_path):
-        logger.info(f"Writing channel {channel_name}/{stack_name}")
-
-        # Writing first multiscale by default
-        pyramid_group = new_channel_group.create_dataset(
-            name="0",
-            shape=dataset_shape,
-            chunks=final_chunksize,
-            dtype=czi.dtype,
-            compressor=writing_options,
-            dimension_separator="/",
-            overwrite=True,
+        # Full resolution spec
+        spec = create_spec(
+            output_path=output_path,
+            data_shape=dataset_shape,
+            data_dtype=czi.dtype.name,
+            shard_shape=shardsize,
+            chunk_shape=chunksize,
+            zyx_resolution=voxel_size,
+            compressor_kwargs=compressor_kwargs,
         )
 
-        # final_chunksize must be TCZYX order
+        tasks = []
+        dataset = ts.open(spec).result()
+
+        # chunksize must be TCZYX order
         for block, axis_area in czi_block_generator(
             czi,
-            axis_jumps=final_chunksize[-3],
+            axis_jumps=chunksize[-3],
             slice_axis="z",
         ):
             region = (
@@ -541,52 +810,21 @@ def czi_stack_zarr_writer(
                 slice(0, dataset_shape[-2]),
                 slice(0, dataset_shape[-1]),
             )
-            pyramid_group[region] = pad_array_n_d(block)
+            write_task = dataset[region].write(pad_array_n_d(block))
+            tasks.append(write_task)
 
-        # Writing multiscales
-        previous_scale = da.from_zarr(pyramid_group, pyramid_group.chunks)
-        written_pyramid.append(previous_scale)
+        # Waiting for the tensorstore tasks
+        asyncio.run(write_tasks(tasks))
 
-        block_shape = list(
-            BlockedArrayWriter.get_block_shape(
-                arr=previous_scale,
-                target_size_mb=target_size_mb,
-                chunks=final_chunksize,
+        for level in range(n_lvls):
+            print(f"Writing scale {level+1}")
+            asyncio.run(
+                create_downsample_dataset(
+                    dataset_path=output_path,
+                    start_scale=level,
+                    downsample_factor=scale_factor,
+                )
             )
-        )
-        block_shape = extra_axes + tuple(block_shape)
-
-        for level in range(1, n_lvls):
-            previous_scale = da.from_zarr(pyramid_group, pyramid_group.chunks)
-            new_scale_factor = (
-                [1] * (len(previous_scale.shape) - len(scale_factor))
-            ) + scale_factor
-
-            previous_scale_pyramid, _ = compute_pyramid(
-                data=previous_scale,
-                scale_axis=new_scale_factor,
-                chunks=final_chunksize,
-                n_lvls=2,
-            )
-            array_to_write = previous_scale_pyramid[-1]
-
-            logger.info(
-                f"[level {level}]: pyramid level: {array_to_write.shape}"
-            )
-
-            pyramid_group = new_channel_group.create_dataset(
-                name=str(level),
-                shape=array_to_write.shape,
-                chunks=final_chunksize,
-                dtype=array_to_write.dtype,
-                compressor=writing_options,
-                dimension_separator="/",
-                overwrite=True,
-            )
-            BlockedArrayWriter.store(
-                array_to_write, pyramid_group, block_shape
-            )
-            written_pyramid.append(array_to_write)
 
     end_time = time.time()
     logger.info(f"Time to write the dataset: {end_time - start_time}")
@@ -598,12 +836,16 @@ def example():
     """
     Conversion example
     """
+    import time
     from pathlib import Path
 
-    czi_test_stack = Path("path/to/data/tiles_test/SPIM/488_large.czi")
+    czi_test_stack = Path(
+        "/Users/camilo.laiton/repositories/Z1/czi_to_zarr/data/tiles_test/SPIM/488_large.czi"
+    )
 
     if czi_test_stack.exists():
         writing_opts = create_czi_opts(codec="zstd", compression_level=3)
+        start_time = time.time()
 
         # for channel_name in
         # for i, chn_name in enumerate(czi_file_reader.channel_names):
@@ -611,7 +853,7 @@ def example():
             czi_path=str(czi_test_stack),
             output_path=f"./{czi_test_stack.stem}",
             voxel_size=[1.0, 1.0, 1.0],
-            final_chunksize=[128, 128, 128],
+            chunksize=[128, 128, 128],
             scale_factor=[2, 2, 2],
             n_lvls=4,
             channel_name=czi_test_stack.stem,
@@ -619,6 +861,8 @@ def example():
             stack_name="test_conversion_czi_package.zarr",
             writing_options=writing_opts["compressor"],
         )
+        end_time = time.time()
+        print(f"Conversion time: {end_time - start_time} s")
 
     else:
         print(f"File does not exist: {czi_test_stack}")

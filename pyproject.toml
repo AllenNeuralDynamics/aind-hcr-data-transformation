@@ -23,8 +23,9 @@ dependencies = [
     'xarray_multiscale==1.1.0',
     'natsort==8.4.0',
     'czifile==2019.7.2.1',
-    'ome-zarr',
-    'awscli'
+    'tensorstore==0.1.72',
+    'ome-zarr==0.10.3',
+    'awscli==1.38.35'
 ]
 
 [project.optional-dependencies]
