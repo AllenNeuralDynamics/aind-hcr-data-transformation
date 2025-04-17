@@ -890,9 +890,7 @@ def example():
     import time
     from pathlib import Path
 
-    czi_test_stack = Path(
-        "/Users/camilo.laiton/repositories/Z1/czi_to_zarr/data/tiles_test/SPIM/488_large.czi"
-    )
+    czi_test_stack = Path("/path/to/test/data/tiles_test/SPIM/488_large.czi")
 
     if czi_test_stack.exists():
         start_time = time.time()
@@ -915,7 +913,7 @@ def example():
                 "clevel": 3,
                 "shuffle": "shuffle",
             },
-            bucket_name="aind-msma-morphology-data",
+            bucket_name="some-test-bucket",
         )
         end_time = time.time()
         print(f"Conversion time: {end_time - start_time} s")
