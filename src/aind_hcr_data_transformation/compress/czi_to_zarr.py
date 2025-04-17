@@ -8,7 +8,6 @@ to zarr.
 import asyncio
 import logging
 import multiprocessing
-import os
 import time
 from typing import (
     List,
@@ -42,8 +41,6 @@ def create_spec(
     cpu_cnt: int = None,
     aws_region: str = "us-west-2",
     bucket_name: str = None,
-    aws_profile: str = "default",
-    credentials_file: str = "~/.aws/credentials",
     read_cache_bytes: int = 1 << 30,
 ) -> dict:
     """
@@ -74,10 +71,6 @@ def create_spec(
         AWS region where the S3 bucket resides. Default is "us-west-2".
     bucket_name : str, optional
         Name of the S3 bucket. Default is "aind-msma-morphology-data".
-    aws_profile : str, optional
-        AWS CLI profile to use for authentication. Default is "default".
-    credentials_file : str, optional
-        Path to AWS credentials file. Default is "~/.aws/credentials".
     read_cache_bytes : int, optional
         Size of the read cache pool in bytes. Default is 1GB.
 
@@ -105,11 +98,11 @@ def create_spec(
             "driver": "s3",
             "bucket": bucket_name,
             "aws_region": aws_region,
-            "aws_credentials": {
-                "type": "profile",
-                "profile": aws_profile,
-                "credentials_file": os.path.expanduser(credentials_file),
-            },
+            # "aws_credentials": {
+            #     "type": "profile",
+            #     "profile": aws_profile,
+            #     "credentials_file": os.path.expanduser(credentials_file),
+            # },
             "context": {
                 "cache_pool": {"total_bytes_limit": read_cache_bytes},
                 "data_copy_concurrency": {"limit": cpu_cnt},
@@ -375,7 +368,9 @@ def czi_stack_zarr_writer(
         # Getting channel color
         channel_colors = None
 
-        print(f"Writing {dataset_shape} from {stack_name} to {output_path} in bucket {bucket_name}")
+        print(
+            f"Writing from {stack_name} to {output_path} bucket {bucket_name}"
+        )
 
         if np.issubdtype(czi.dtype, np.integer):
             np_info_func = np.iinfo
