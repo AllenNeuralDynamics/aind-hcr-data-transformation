@@ -15,7 +15,8 @@ from czifile.czifile import create_output
 from natsort import natsorted
 
 from aind_hcr_data_transformation.models import ArrayLike, PathLike
-
+import json
+import boto3
 
 def add_leading_dim(data: ArrayLike) -> ArrayLike:
     """
@@ -524,3 +525,42 @@ def czi_block_generator(
             max_workers=None,
         )
         yield block, slice(start_slice, end_slice)
+
+def write_json(
+    output_path: str,
+    json_data: dict,
+    bucket_name: Optional[str] = None,
+):
+    """
+    Writes the multiscale json in the top
+    level directory of the zarr.
+
+    Parameters
+    ----------
+    output_path: str
+        Output path where we want the json
+
+    json_data: dict
+        Dictionary with the zarr.json metadata.
+
+    bucket_name: Optional[str]
+        Path where we want to store the json in s3.
+        If default is None, the file will be saved
+        locally. Default: None
+
+    """
+    json_key = f"{output_path}/zarr.json"
+    if bucket_name:
+        s3 = boto3.client("s3")
+
+        # Upload the JSON string as a file to S3
+        s3.put_object(
+            Bucket=bucket_name,
+            Key=json_key,
+            Body=json.dumps(json_data, indent=2),
+            ContentType="application/json",
+        )
+
+    else:
+        with open(json_key, "w") as fp:
+            json.dump(json_data, fp, indent=2)
