@@ -2,14 +2,13 @@
 
 import logging
 import os
-import shutil
 import sys
 from pathlib import Path
 from time import time
-from typing import Any, List, Optional
+from typing import Any, Dict, List
+from urllib.parse import urlparse
 
 from aind_data_transformation.core import GenericEtl, JobResponse, get_parser
-from numcodecs.blosc import Blosc
 
 from aind_hcr_data_transformation.compress.czi_to_zarr import (
     czi_stack_zarr_writer,
@@ -86,7 +85,7 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
 
         return [z, y, x]
 
-    def _get_compressor(self) -> Optional[Blosc]:
+    def _get_compressor(self) -> Dict:
         """
         Utility method to construct a compressor class.
         Returns
@@ -96,7 +95,7 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
 
         """
         if self.job_settings.compressor_name == CompressorName.BLOSC:
-            return Blosc(**self.job_settings.compressor_kwargs)
+            return self.job_settings.compressor_kwargs
         else:
             return None
 
@@ -129,16 +128,26 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
             acquisition_path=acquisition_path
         )
 
+        # Output path for VAST
+        output_path = Path(self.job_settings.output_directory)
+        bucket_name = None
+
+        # If s3_location is provided, we define the bucket name
+        # and parse the output path to the prefix
+        if self.job_settings.s3_location:
+            parsed = urlparse(self.job_settings.s3_location)
+            bucket_name = parsed.netloc
+            output_path = Path(parsed.path.lstrip("/"))
+
         # Converting CZI tiles to Multiscale OMEZarr
         for stack in stacks_to_process:
             logging.info(f"Converting {stack}")
             stack_name = stack.stem
 
-            output_path = Path(self.job_settings.output_directory)
-
             msg = (
                 f"Voxel resolution ZYX {voxel_size_zyx} for {stack} "
-                f"with name {stack_name} - output: {output_path}"
+                f"with name {stack_name} - output: {output_path} "
+                f"with bucket name: {bucket_name}"
             )
             logging.info(msg)
 
@@ -146,43 +155,16 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
                 czi_path=str(stack),
                 output_path=output_path,
                 voxel_size=voxel_size_zyx,
-                final_chunksize=self.job_settings.chunk_size,
+                shard_size=self.job_settings.shard_size,
+                chunk_size=self.job_settings.chunk_size,
                 scale_factor=self.job_settings.scale_factor,
                 n_lvls=self.job_settings.downsample_levels,
                 channel_name=stack_name,
                 stack_name=f"{stack_name}.ome.zarr",
                 logger=logging,
-                writing_options=compressor,
-                target_size_mb=self.job_settings.target_size_mb,
+                compressor_kwargs=compressor,
+                bucket_name=bucket_name,
             )
-
-            if self.job_settings.s3_location is not None:
-                channel_zgroup_file = output_path / ".zgroup"
-                s3_channel_zgroup_file = (
-                    f"{self.job_settings.s3_location}/.zgroup"
-                )
-                logging.info(
-                    f"Uploading {channel_zgroup_file} to "
-                    f"{s3_channel_zgroup_file}"
-                )
-                utils.copy_file_to_s3(
-                    channel_zgroup_file, s3_channel_zgroup_file
-                )
-                ome_zarr_stack_name = f"{stack_name}.ome.zarr"
-                ome_zarr_stack_path = output_path.joinpath(ome_zarr_stack_name)
-                s3_stack_dir = (
-                    f"{self.job_settings.s3_location}/"
-                    f"{ome_zarr_stack_name}"
-                )
-                logging.info(
-                    f"Uploading {ome_zarr_stack_path} to {s3_stack_dir}"
-                )
-                utils.sync_dir_to_s3(ome_zarr_stack_path, s3_stack_dir)
-                logging.info(f"Removing: {ome_zarr_stack_path}")
-                # Remove stack if uploaded to s3. We can potentially do all
-                # the stacks in the partition in parallel using dask to speed
-                # this up
-                shutil.rmtree(ome_zarr_stack_path)
 
     def _upload_derivatives_folder(self):
         """

@@ -4,13 +4,10 @@ from enum import Enum
 from pathlib import Path
 from typing import List, Optional, Union
 
-import numpy as np
 from aind_data_transformation.core import BasicJobSettings
-from dask import array as da
 from numcodecs import Blosc
 from pydantic import Field
 
-ArrayLike = Union[da.Array, np.ndarray]
 PathLike = Union[str, Path]
 
 
@@ -50,7 +47,7 @@ class ZeissJobSettings(BasicJobSettings):
     )
     # It will be safer if these kwargs fields were objects with known schemas
     compressor_kwargs: dict = Field(
-        default={"cname": "zstd", "clevel": 3, "shuffle": Blosc.SHUFFLE},
+        default={"cname": "zstd", "clevel": 3, "shuffle": "shuffle"},
         description="Arguments to be used for the compressor.",
         title="Compressor Kwargs",
     )
@@ -58,6 +55,11 @@ class ZeissJobSettings(BasicJobSettings):
         default={"n_jobs": -1},  # -1 to use all available cpu cores.
         description="Arguments for recording save method.",
         title="Compress Job Save Kwargs",
+    )
+    shard_size: List[int] = Field(
+        default=[512, 512, 512],  # Default list with three integers
+        description="Shard size in axis, a list of three integers",
+        title="Shard Size",
     )
     chunk_size: List[int] = Field(
         default=[128, 128, 128],  # Default list with three integers
@@ -70,12 +72,7 @@ class ZeissJobSettings(BasicJobSettings):
         title="Scale Factors",
     )
     downsample_levels: int = Field(
-        default=4,
+        default=5,
         description="The number of levels of the image pyramid",
         title="Downsample Levels",
-    )
-    target_size_mb: int = Field(
-        default=19200,
-        description="Target size to pull from the CZI file to zarr",
-        title="Target Size",
     )

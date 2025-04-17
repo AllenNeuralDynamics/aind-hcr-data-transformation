@@ -4,7 +4,6 @@ Tests for the zarr writer
 
 import unittest
 
-import dask.array as da
 import numpy as np
 
 from aind_hcr_data_transformation.compress import zarr_writer
@@ -17,7 +16,7 @@ class ZarrWriterTest(unittest.TestCase):
         """
         Tests get size method
         """
-        test_arr = da.zeros((2, 2), dtype=np.uint8)
+        test_arr = np.zeros((2, 2), dtype=np.uint8)
 
         expected_result = np.prod(test_arr.shape) * test_arr.itemsize
 
@@ -30,7 +29,7 @@ class ZarrWriterTest(unittest.TestCase):
         """
         Tests get size failure
         """
-        test_arr = da.zeros((0, 2), dtype=np.uint8)
+        test_arr = np.zeros((0, 2), dtype=np.uint8)
 
         with self.assertRaises(ValueError):
             zarr_writer._get_size(
@@ -39,8 +38,8 @@ class ZarrWriterTest(unittest.TestCase):
 
     def test_closer_to_target(self):
         """Tests closer to target function"""
-        test_arr_1 = da.zeros((10, 10), dtype=np.uint8)
-        test_arr_2 = da.zeros((20, 20), dtype=np.uint8)
+        test_arr_1 = np.zeros((10, 10), dtype=np.uint8)
+        test_arr_2 = np.zeros((20, 20), dtype=np.uint8)
         target_bytes = 4
 
         shape_close_target = zarr_writer._closer_to_target(
