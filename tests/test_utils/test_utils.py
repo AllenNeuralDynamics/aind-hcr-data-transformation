@@ -6,7 +6,6 @@ import os
 import unittest
 from pathlib import Path
 
-import dask.array as da
 import numpy as np
 
 from aind_hcr_data_transformation.utils import utils
@@ -26,7 +25,7 @@ class IoUtilitiesTest(unittest.TestCase):
         Tests that a new dimension is added
         to the array.
         """
-        test_arr = da.zeros((2, 2), dtype=np.uint8)
+        test_arr = np.zeros((2, 2), dtype=np.uint8)
         transformed_arr = utils.add_leading_dim(data=test_arr)
 
         self.assertEqual(test_arr.ndim + 1, transformed_arr.ndim)
@@ -36,7 +35,7 @@ class IoUtilitiesTest(unittest.TestCase):
         Tests the array data is extracted
         when there are expanded dimensions.
         """
-        test_arr = da.zeros((1, 1, 1, 2, 2), dtype=np.uint8)
+        test_arr = np.zeros((1, 1, 1, 2, 2), dtype=np.uint8)
         transformed_arr_no_lead = utils.extract_data(arr=test_arr)
         transformed_arr_with_lead = utils.extract_data(
             arr=test_arr, last_dimensions=3
@@ -52,14 +51,14 @@ class IoUtilitiesTest(unittest.TestCase):
         """
         Tests failure of extract data
         """
-        test_arr = da.zeros((2, 2), dtype=np.uint8)
+        test_arr = np.zeros((2, 2), dtype=np.uint8)
 
         with self.assertRaises(ValueError):
             utils.extract_data(arr=test_arr, last_dimensions=3)
 
     def test_pad_array(self):
         """Tests padding an array"""
-        test_arr = da.zeros((2, 2), dtype=np.uint8)
+        test_arr = np.zeros((2, 2), dtype=np.uint8)
         padded_test_arr = utils.pad_array_n_d(arr=test_arr)
 
         self.assertEqual(5, padded_test_arr.ndim)
@@ -69,7 +68,7 @@ class IoUtilitiesTest(unittest.TestCase):
 
     def test_pad_array_fail(self):
         """Tests padding an array"""
-        test_arr = da.zeros((2, 2), dtype=np.uint8)
+        test_arr = np.zeros((2, 2), dtype=np.uint8)
 
         with self.assertRaises(ValueError):
             utils.pad_array_n_d(arr=test_arr, dim=6)

@@ -4,13 +4,10 @@ from enum import Enum
 from pathlib import Path
 from typing import List, Optional, Union
 
-import numpy as np
 from aind_data_transformation.core import BasicJobSettings
-from dask import array as da
 from numcodecs import Blosc
 from pydantic import Field
 
-ArrayLike = Union[da.Array, np.ndarray]
 PathLike = Union[str, Path]
 
 
