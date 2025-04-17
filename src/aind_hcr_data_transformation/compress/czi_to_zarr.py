@@ -86,6 +86,8 @@ def create_spec(
     spec : dict
         TensorStore specification dictionary to create a new Zarr v3 dataset.
     """
+    output_path = str(output_path)
+
     if cpu_cnt is None:
         cpu_cnt = multiprocessing.cpu_count()
 
@@ -215,6 +217,8 @@ async def create_downsample_dataset(
         The function writes a new downsampled scale directly
         to the same Zarr dataset.
     """
+    dataset_path = str(dataset_path)
+    
     if cpu_cnt is None:
         cpu_cnt = multiprocessing.cpu_count()
 

@@ -2,14 +2,12 @@
 
 import logging
 import os
-import shutil
 import sys
 from pathlib import Path
 from time import time
-from typing import Any, List, Optional
+from typing import Any, List, Dict
 
 from aind_data_transformation.core import GenericEtl, JobResponse, get_parser
-from numcodecs.blosc import Blosc
 
 from aind_hcr_data_transformation.compress.czi_to_zarr import (
     czi_stack_zarr_writer,
@@ -86,7 +84,7 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
 
         return [z, y, x]
 
-    def _get_compressor(self) -> Optional[Blosc]:
+    def _get_compressor(self) -> Dict:
         """
         Utility method to construct a compressor class.
         Returns
@@ -154,7 +152,7 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
                 stack_name=f"{stack_name}.ome.zarr",
                 logger=logging,
                 compressor_kwargs=compressor,
-                bucket_name=self.s3_location,
+                bucket_name=self.job_settings.s3_location,
             )
 
     def _upload_derivatives_folder(self):

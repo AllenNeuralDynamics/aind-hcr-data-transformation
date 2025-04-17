@@ -15,12 +15,11 @@ def main(partition_id):
     num_partitions = 1  # Should match the number of nodes
 
     basic_job_settings = ZeissJobSettings(
-        input_source="/path/to/data/tiles_test",
-        output_directory=f"./test_conversion_partition_{partition_id}",
+        input_source="/Users/camilo.laiton/repositories/Z1/czi_to_zarr/data/tiles_test",
+        output_directory=f"test_conversion_partition_{partition_id}",
         num_of_partitions=num_partitions,
         partition_to_process=partition_id,
-        target_size_mb=19200,
-        s3_location="bucket",
+        s3_location=None,
     )
     basic_job = ZeissCompressionJob(job_settings=basic_job_settings)
     basic_job.run_job()
@@ -28,7 +27,7 @@ def main(partition_id):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Usage: python your_script.py <partition_id>")
+        print("Usage: python example.py <partition_id>")
         sys.exit(1)
 
     partition_id = int(sys.argv[1])
