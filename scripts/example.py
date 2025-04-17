@@ -2,6 +2,7 @@
 Example job with partitioning
 """
 
+import os
 import sys
 
 from aind_hcr_data_transformation.models import ZeissJobSettings
@@ -15,7 +16,7 @@ def main(partition_id):
     num_partitions = 1  # Should match the number of nodes
 
     basic_job_settings = ZeissJobSettings(
-        input_source="/Users/camilo.laiton/repositories/Z1/czi_to_zarr/data/tiles_test",
+        input_source=os.getenv("INPUT_SOURCE"),
         output_directory=f"test_conversion_partition_{partition_id}",
         num_of_partitions=num_partitions,
         partition_to_process=partition_id,

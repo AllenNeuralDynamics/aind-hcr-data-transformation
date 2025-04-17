@@ -218,7 +218,7 @@ async def create_downsample_dataset(
         to the same Zarr dataset.
     """
     dataset_path = str(dataset_path)
-    
+
     if cpu_cnt is None:
         cpu_cnt = multiprocessing.cpu_count()
 
@@ -479,9 +479,7 @@ def example():
     import time
     from pathlib import Path
 
-    czi_test_stack = Path(
-        "/path/to/data/tiles_test/SPIM/488_large.czi"
-    )
+    czi_test_stack = Path("/path/to/data/tiles_test/SPIM/488_large.czi")
 
     if czi_test_stack.exists():
         start_time = time.time()

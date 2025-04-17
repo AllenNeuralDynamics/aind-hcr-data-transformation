@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 from time import time
-from typing import Any, List, Dict
+from typing import Any, Dict, List
 
 from aind_data_transformation.core import GenericEtl, JobResponse, get_parser
 

@@ -10,13 +10,13 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 
+import boto3
 import numpy as np
 from czifile.czifile import create_output
 from natsort import natsorted
 
 from aind_hcr_data_transformation.models import ArrayLike, PathLike
-import json
-import boto3
+
 
 def add_leading_dim(data: ArrayLike) -> ArrayLike:
     """
@@ -525,6 +525,7 @@ def czi_block_generator(
             max_workers=None,
         )
         yield block, slice(start_slice, end_slice)
+
 
 def write_json(
     output_path: str,
