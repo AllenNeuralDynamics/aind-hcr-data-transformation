@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from time import time
 from typing import Any, Dict, List
+from urllib.parse import urlparse
 
 from aind_data_transformation.core import GenericEtl, JobResponse, get_parser
 
@@ -127,16 +128,26 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
             acquisition_path=acquisition_path
         )
 
+        # Output path for VAST
+        output_path = Path(self.job_settings.output_directory)
+        bucket_name = None
+
+        # If s3_location is provided, we define the bucket name
+        # and parse the output path to the prefix
+        if self.job_settings.s3_location:
+            parsed = urlparse(self.job_settings.s3_location)
+            bucket_name = parsed.netloc
+            output_path = Path(parsed.path.lstrip("/"))
+
         # Converting CZI tiles to Multiscale OMEZarr
         for stack in stacks_to_process:
             logging.info(f"Converting {stack}")
             stack_name = stack.stem
 
-            output_path = Path(self.job_settings.output_directory)
-
             msg = (
                 f"Voxel resolution ZYX {voxel_size_zyx} for {stack} "
-                f"with name {stack_name} - output: {output_path}"
+                f"with name {stack_name} - output: {output_path} "
+                f"with bucket name: {bucket_name}"
             )
             logging.info(msg)
 
@@ -152,7 +163,7 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
                 stack_name=f"{stack_name}.ome.zarr",
                 logger=logging,
                 compressor_kwargs=compressor,
-                bucket_name=self.job_settings.s3_location,
+                bucket_name=bucket_name,
             )
 
     def _upload_derivatives_folder(self):

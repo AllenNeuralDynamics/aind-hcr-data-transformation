@@ -361,7 +361,7 @@ def czi_stack_zarr_writer(
     compressor_kwargs: Dict
         Blosc compressor arguments for tensorstore
     """
-    written_pyramid = []
+    output_path = f"{output_path}/{stack_name}"
     start_time = time.time()
 
     with czifile.CziFile(str(czi_path)) as czi:
@@ -375,7 +375,7 @@ def czi_stack_zarr_writer(
         # Getting channel color
         channel_colors = None
 
-        print(f"Writing {dataset_shape} from {stack_name} to {output_path}")
+        print(f"Writing {dataset_shape} from {stack_name} to {output_path} in bucket {bucket_name}")
 
         if np.issubdtype(czi.dtype, np.integer):
             np_info_func = np.iinfo
@@ -469,7 +469,6 @@ def czi_stack_zarr_writer(
     end_time = time.time()
     logger.info(f"Time to write the dataset: {end_time - start_time}")
     print(f"Time to write the dataset: {end_time - start_time}")
-    logger.info(f"Written pyramid: {written_pyramid}")
 
 
 def example():
