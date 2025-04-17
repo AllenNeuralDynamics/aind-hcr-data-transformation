@@ -13,7 +13,7 @@ COPY pyproject.toml README.md setup.py ./
 COPY src ./src
 
 # Install dependencies
-RUN pip install --no-cache-dir pip setuptools setuptools-scm awscli && \
+RUN pip install --no-cache-dir pip setuptools setuptools-scm && \
     pip install --no-cache-dir .
 
 # Set the entrypoint for the container
