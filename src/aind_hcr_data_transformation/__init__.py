@@ -8,7 +8,7 @@ __author_emails__ = [
     "camilo.laiton@alleninstitute.org",
 ]
 __license__ = "MIT"
-__description__ = "Repository for transforming CZI data to ome.zarr"
+__description__ = "Repository for transforming CZI data to zarr"
 __url__ = "https://github.com/AllenNeuralDynamics/aind-hcr-data-transformation"
 
 __maintainers__ = ["Camilo Laiton"]

@@ -59,6 +59,11 @@ class ZeissJobSettings(BasicJobSettings):
         description="Arguments for recording save method.",
         title="Compress Job Save Kwargs",
     )
+    shard_size: List[int] = Field(
+        default=[512, 512, 512],  # Default list with three integers
+        description="Shard size in axis, a list of three integers",
+        title="Shard Size",
+    )
     chunk_size: List[int] = Field(
         default=[128, 128, 128],  # Default list with three integers
         description="Chunk size in axis, a list of three integers",
@@ -70,12 +75,7 @@ class ZeissJobSettings(BasicJobSettings):
         title="Scale Factors",
     )
     downsample_levels: int = Field(
-        default=4,
+        default=5,
         description="The number of levels of the image pyramid",
         title="Downsample Levels",
-    )
-    target_size_mb: int = Field(
-        default=19200,
-        description="Target size to pull from the CZI file to zarr",
-        title="Target Size",
     )
