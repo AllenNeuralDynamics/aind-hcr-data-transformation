@@ -828,6 +828,7 @@ def czi_stack_zarr_writer(
         # Full resolution spec
         spec = create_spec(
             output_path=output_path,
+            bucket_name=bucket_name,
             data_shape=dataset_shape,
             data_dtype=czi.dtype.name,
             shard_shape=shard_size,
@@ -859,13 +860,13 @@ def czi_stack_zarr_writer(
         asyncio.run(write_tasks(tasks))
 
         for level in range(n_lvls):
-            print(f"Writing scale {level+1}")
             asyncio.run(
                 create_downsample_dataset(
                     dataset_path=output_path,
                     start_scale=level,
                     downsample_factor=scale_factor,
                     compressor_kwargs=compressor_kwargs,
+                    bucket_name=bucket_name,
                 )
             )
 
@@ -900,7 +901,7 @@ def example():
         # for i, chn_name in enumerate(czi_file_reader.channel_names):
         czi_stack_zarr_writer(
             czi_path=str(czi_test_stack),
-            output_path=f"{czi_test_stack.stem}",
+            output_path=f"test_data/SmartSPIM/{czi_test_stack.stem}.zarr",
             voxel_size=[1.0, 1.0, 1.0],
             shard_size=[512, 512, 512],
             chunk_size=[128, 128, 128],
@@ -914,6 +915,7 @@ def example():
                 "clevel": 3,
                 "shuffle": "shuffle",
             },
+            bucket_name="aind-msma-morphology-data",
         )
         end_time = time.time()
         print(f"Conversion time: {end_time - start_time} s")
