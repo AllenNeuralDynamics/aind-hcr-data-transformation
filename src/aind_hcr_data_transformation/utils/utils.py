@@ -14,9 +14,10 @@ import boto3
 import numpy as np
 from czifile.czifile import create_output
 from natsort import natsorted
+from numpy.typing import ArrayLike
 
 from aind_hcr_data_transformation.models import PathLike
-from numpy.typing import ArrayLike
+
 
 def add_leading_dim(data: ArrayLike) -> ArrayLike:
     """
