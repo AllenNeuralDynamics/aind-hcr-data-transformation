@@ -21,6 +21,7 @@ def main(partition_id):
         num_of_partitions=num_partitions,
         partition_to_process=partition_id,
         s3_location=os.getenv("OUTPUT_S3_PATH"),
+        tensorstore_batch_size=3,
     )
     basic_job = ZeissCompressionJob(job_settings=basic_job_settings)
     basic_job.run_job()

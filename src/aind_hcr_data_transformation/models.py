@@ -76,3 +76,8 @@ class ZeissJobSettings(BasicJobSettings):
         description="The number of levels of the image pyramid",
         title="Downsample Levels",
     )
+    tensorstore_batch_size: int = Field(
+        default=3,
+        description="Batch size to execute concurrent tensorstore tasks",
+        title="Tensorstore batch size",
+    )

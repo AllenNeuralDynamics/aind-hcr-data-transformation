@@ -164,6 +164,7 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
                 logger=logging,
                 compressor_kwargs=compressor,
                 bucket_name=bucket_name,
+                batch_size=self.job_settings.tensorstore_batch_size,
             )
 
     def _upload_derivatives_folder(self):

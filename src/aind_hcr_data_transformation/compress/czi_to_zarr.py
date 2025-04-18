@@ -283,18 +283,20 @@ async def create_downsample_dataset(
     downsampled_data = await downsampled_dataset.read()
     await down_dataset.write(downsampled_data)
 
-
-async def write_tasks(list_of_tasks: List):
+async def write_tasks(list_of_tasks: List, batch_size: int = 6):
     """
-    Gathers all the tensorstore tasks
+    Gathers tensorstore tasks in batches.
 
     Parameters
     ----------
     list_of_tasks: List
         List of tensorstore tasks
+    batch_size: int
+        Number of tasks to run concurrently in each batch
     """
-    # Wait for all tasks to complete
-    await asyncio.gather(*list_of_tasks)
+    for i in range(0, len(list_of_tasks), batch_size):
+        batch = list_of_tasks[i:i + batch_size]
+        await asyncio.gather(*batch)
 
 
 def czi_stack_zarr_writer(
@@ -309,6 +311,7 @@ def czi_stack_zarr_writer(
     logger: logging.Logger,
     stack_name: str,
     compressor_kwargs: dict,
+    batch_size: int = 6,
     bucket_name: Optional[str] = None,
 ):
     """
@@ -351,8 +354,18 @@ def czi_stack_zarr_writer(
     logger: logging.Logger
         Logger object
 
+    stack_name: str
+        Stack name for the zarr3
+
     compressor_kwargs: Dict
         Blosc compressor arguments for tensorstore
+    
+    batch_size: int = 6
+        Batch size for the tensorstore tasks
+
+    bucket_name: Optional[str] = None
+        Bucket name to upload the dataset.
+        If it is None, then it will be stored locally.
     """
     output_path = f"{output_path}/{stack_name}"
     start_time = time.time()
@@ -441,7 +454,7 @@ def czi_stack_zarr_writer(
             tasks.append(write_task)
 
         # Waiting for the tensorstore tasks
-        asyncio.run(write_tasks(tasks))
+        asyncio.run(write_tasks(tasks, batch_size=batch_size))
 
         for level in range(n_lvls):
             asyncio.run(
