@@ -127,6 +127,7 @@ def create_spec(
             "shape": data_shape,
             "zarr_format": 3,
             "node_type": "array",
+            "fill_value": 0,
             "chunk_grid": {
                 "name": "regular",
                 "configuration": {"chunk_shape": shard_shape},
@@ -176,6 +177,7 @@ async def create_downsample_dataset(
     dataset_path: str,
     start_scale: int,
     downsample_factor: list,
+    downsample_mode: str,
     compressor_kwargs: dict,
     cpu_cnt: int = None,
     aws_region: str = "us-west-2",
@@ -193,6 +195,8 @@ async def create_downsample_dataset(
         The scale level to downsample from (e.g., 0 for original resolution).
     downsample_factor : list of int
         Downsampling factor for each of [t, c, z, y, x] dimensions.
+    downsample_mode : str
+        Downsampling method. Options are: stride, median, mode, mean, min, max.
     compressor_kwargs: Dict
         Blosc compressor arguments for tensorstore
     cpu_cnt : int, optional
@@ -240,7 +244,7 @@ async def create_downsample_dataset(
     source_w_down_spec = {
         "driver": "downsample",
         "downsample_factors": downsample_factor,
-        "downsample_method": "mean",
+        "downsample_method": downsample_mode,
         "base": {
             "driver": "zarr3",
             "kvstore": {
@@ -252,6 +256,7 @@ async def create_downsample_dataset(
             "recheck_cached_data": False,
         },
     }
+    print(source_w_down_spec)
 
     downsampled_dataset = await ts.open(spec=source_w_down_spec)
     source_dataset = downsampled_dataset.base
@@ -283,6 +288,7 @@ async def create_downsample_dataset(
     downsampled_data = await downsampled_dataset.read()
     await down_dataset.write(downsampled_data)
 
+
 async def write_tasks(list_of_tasks: List, batch_size: int = 6):
     """
     Gathers tensorstore tasks in batches.
@@ -295,7 +301,7 @@ async def write_tasks(list_of_tasks: List, batch_size: int = 6):
         Number of tasks to run concurrently in each batch
     """
     for i in range(0, len(list_of_tasks), batch_size):
-        batch = list_of_tasks[i:i + batch_size]
+        batch = list_of_tasks[i : i + batch_size]
         await asyncio.gather(*batch)
 
 
@@ -311,7 +317,8 @@ def czi_stack_zarr_writer(
     logger: logging.Logger,
     stack_name: str,
     compressor_kwargs: dict,
-    batch_size: int = 6,
+    downsample_mode: Optional[str] = "mean",
+    batch_size: Optional[int] = 6,
     bucket_name: Optional[str] = None,
 ):
     """
@@ -359,7 +366,12 @@ def czi_stack_zarr_writer(
 
     compressor_kwargs: Dict
         Blosc compressor arguments for tensorstore
-    
+
+    downsample_mode: str
+        Downsample mode for the dataset.
+        Options are: stride, median, mode, mean, min, max
+        Default is mean.
+
     batch_size: int = 6
         Batch size for the tensorstore tasks
 
@@ -420,6 +432,7 @@ def czi_stack_zarr_writer(
             channel_startend=channel_startend,
             metadata=_get_pyramid_metadata(),
             chunk_size=chunk_size,
+            origin=[0, 0, 0],  # TODO get nominal coordinates into metadata
         )
 
         # Full resolution spec
@@ -462,6 +475,7 @@ def czi_stack_zarr_writer(
                     dataset_path=output_path,
                     start_scale=level,
                     downsample_factor=scale_factor,
+                    downsample_mode=downsample_mode,
                     compressor_kwargs=compressor_kwargs,
                     bucket_name=bucket_name,
                 )
@@ -486,7 +500,9 @@ def example():
     import time
     from pathlib import Path
 
-    czi_test_stack = Path("/path/to/data/tiles_test/SPIM/488_large.czi")
+    czi_test_stack = Path(
+        "/Users/camilo.laiton/repositories/Z1/czi_to_zarr/data/tiles_test/SPIM/488_large.czi"
+    )
 
     if czi_test_stack.exists():
         start_time = time.time()
@@ -495,12 +511,12 @@ def example():
         # for i, chn_name in enumerate(czi_file_reader.channel_names):
         czi_stack_zarr_writer(
             czi_path=str(czi_test_stack),
-            output_path=f"test_data/SmartSPIM/{czi_test_stack.stem}.zarr",
+            output_path=f"test_data/diSPIM/hcr_dt_test/{czi_test_stack.stem}.zarr",
             voxel_size=[1.0, 1.0, 1.0],
             shard_size=[512, 512, 512],
             chunk_size=[128, 128, 128],
             scale_factor=[2, 2, 2],
-            n_lvls=3,
+            n_lvls=4,
             channel_name=czi_test_stack.stem,
             logger=logging.Logger(name="test"),
             stack_name="test_conversion_czi_package.zarr",
@@ -509,7 +525,8 @@ def example():
                 "clevel": 3,
                 "shuffle": "shuffle",
             },
-            # bucket_name="some-test-bucket",
+            downsample_mode="mean",
+            bucket_name="aind-msma-morphology-data",
         )
         end_time = time.time()
         print(f"Conversion time: {end_time - start_time} s")

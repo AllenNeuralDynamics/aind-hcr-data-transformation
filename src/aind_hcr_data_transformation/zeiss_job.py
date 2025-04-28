@@ -159,6 +159,7 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
                 chunk_size=self.job_settings.chunk_size,
                 scale_factor=self.job_settings.scale_factor,
                 n_lvls=self.job_settings.downsample_levels,
+                downsample_mode=self.job_settings.downsample_mode,
                 channel_name=stack_name,
                 stack_name=f"{stack_name}.ome.zarr",
                 logger=logging,
