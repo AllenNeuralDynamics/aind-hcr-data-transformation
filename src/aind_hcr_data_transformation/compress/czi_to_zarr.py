@@ -270,11 +270,11 @@ def _downscale_origin(
         current_voxel_size = next_voxel_size
 
         # Append the new origin
-        new_origins.append(float([0, 0] + current_origin.tolist()))
+        new_origins.append([0.0, 0.0] + current_origin.tolist())
 
     # Ensure the initial origin is 5D
     if len(new_origins[0]) < 5:
-        new_origins[0] = float([0, 0] + new_origins[0])
+        new_origins[0] = [0.0, 0.0] + new_origins[0]
 
     return new_origins
 
@@ -348,7 +348,7 @@ def write_ome_ngff_metadata(
         )
 
     coordinate_transformations, chunk_opts = _compute_scales(
-        n_lvls, scale_factors, voxel_size, final_chunksize, arr_shape, None
+        n_lvls, scale_factors, voxel_size, final_chunksize, arr_shape, origin
     )
     fmt.validate_coordinate_transformations(
         len(arr_shape), n_lvls, coordinate_transformations
