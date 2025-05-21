@@ -106,7 +106,7 @@ def _compute_scales(
     pixelsizes: Tuple[float, float, float],
     chunks: Tuple[int, int, int, int, int],
     data_shape: Tuple[int, int, int, int, int],
-    translation: Optional[List[float]] = None,
+    translations: Optional[List[float]] = None,
 ) -> Tuple[List, List]:
     """
     Generate the list of coordinate transformations
@@ -142,9 +142,9 @@ def _compute_scales(
             }
         ]
     ]
-    if translation is not None:
+    if translations is not None:
         transforms[0].append(
-            {"type": "translation", "translation": translation}
+            {"type": "translation", "translation": translations[0]}
         )
     chunk_sizes = []
     lastz = data_shape[2]
@@ -178,9 +178,9 @@ def _compute_scales(
                     }
                 ]
             )
-            if translation is not None:
+            if translations is not None:
                 transforms[-1].append(
-                    {"type": "translation", "translation": translation}
+                    {"type": "translation", "translation": translations[i + 1]}
                 )
             lastz = int(np.ceil(lastz / scale_factor[0]))
             lasty = int(np.ceil(lasty / scale_factor[1]))
@@ -223,6 +223,62 @@ def _get_axes_5d(
     return axes_5d
 
 
+def _downscale_origin(
+    array_shape: List[int],
+    origin: List[float],
+    voxel_size: List[float],
+    scale_factors: List[int],
+    n_levels: int,
+):
+    """
+    Calculate new origins for downscaled coordinate grids.
+
+    Parameters
+    ----------
+    array_shape : List[int]
+        Shape of the array in [t, c, z, y, x] order.
+    origin : list or tuple of float
+        The initial origin coordinates (z, y, x) of the array.
+    voxel_size : list or tuple of float
+        The size of each voxel along the (z, y, x) dimensions.
+    scale_factors : list or tuple of int
+        The factors by which to downscale the coordinates along each axis
+        (z, y, x).
+    n_levels : int
+        The number of downscaling levels to calculate.
+
+    Returns
+    -------
+    new_origins : list of list of float
+        A list of new origin coordinates for each downscaled level.
+    """
+    current_shape = np.array(array_shape[-3:], dtype=np.int32)
+    current_origin = np.array(origin[-3:], dtype=np.float64)
+    current_voxel_size = np.array(voxel_size[-3:], dtype=np.float64)
+    scale_factors = np.array(scale_factors[-3:], dtype=np.int32)
+
+    new_origins = [current_origin.tolist()]
+
+    for _ in range(n_levels - 1):
+
+        # Calculate the center shift for the new origin
+        center_shift = (current_voxel_size * (scale_factors - 1)) / 2
+        current_origin += center_shift
+
+        current_shape = np.ceil(current_shape / scale_factors).astype(int)
+        next_voxel_size = current_voxel_size * scale_factors
+        current_voxel_size = next_voxel_size
+
+        # Append the new origin
+        new_origins.append([0.0, 0.0] + current_origin.tolist())
+
+    # Ensure the initial origin is 5D
+    if len(new_origins[0]) < 5:
+        new_origins[0] = [0.0, 0.0] + new_origins[0]
+
+    return new_origins
+
+
 def write_ome_ngff_metadata(
     group: zarr.Group,
     arr_shape: List[int],
@@ -235,6 +291,7 @@ def write_ome_ngff_metadata(
     channel_colors: List[str] = None,
     channel_minmax: List[float] = None,
     channel_startend: List[float] = None,
+    origin: list = None,
     metadata: dict = None,
 ):
     """
@@ -284,8 +341,14 @@ def write_ome_ngff_metadata(
     )
     group.attrs["omero"] = ome_json
     axes_5d = _get_axes_5d()
+
+    if origin is not None:
+        origin = _downscale_origin(
+            arr_shape, origin[-3:], voxel_size[-3:], scale_factors[-3:], n_lvls
+        )
+
     coordinate_transformations, chunk_opts = _compute_scales(
-        n_lvls, scale_factors, voxel_size, final_chunksize, arr_shape, None
+        n_lvls, scale_factors, voxel_size, final_chunksize, arr_shape, origin
     )
     fmt.validate_coordinate_transformations(
         len(arr_shape), n_lvls, coordinate_transformations
@@ -509,6 +572,7 @@ def czi_stack_zarr_writer(
             channel_startend=channel_startend,
             metadata=_get_pyramid_metadata(),
             final_chunksize=final_chunksize,
+            origin=[0, 0, 0],
         )
 
         # performance_report_path = f"{output_path}/report_{stack_name}.html"
