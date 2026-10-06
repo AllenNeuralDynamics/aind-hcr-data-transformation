@@ -2,7 +2,7 @@
 CZI to Zarr stack conversion
 """
 
-__version__ = "0.0.8"
+__version__ = "1.0.0"
 __authors__ = ["Camilo Laiton", "Carson Berry"]
 __author_emails__ = [
     "camilo.laiton@alleninstitute.org",
