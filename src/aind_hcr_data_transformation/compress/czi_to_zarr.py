@@ -10,7 +10,6 @@ import logging
 import multiprocessing
 import time
 from typing import List, Optional
-from pathlib import Path
 
 import czifile
 import numpy as np
@@ -448,7 +447,6 @@ async def czi_stack_zarr_writer(
         MemoryLogger.log_memory_cpu(
             "Before scheduling tensorstore tasks", logger
         )
-        tasks = []
         dataset = ts.open(spec).result()
 
         # add memorylogger to this section to get overhead
@@ -469,30 +467,23 @@ async def czi_stack_zarr_writer(
                 slice(0, dataset_shape[-1]),
             )
             MemoryLogger.log_memory_cpu(
-            "Before Writing tensorstore tasks", logger
+                "Before Writing tensorstore tasks", logger
             )
             await dataset[region].write(pad_array_n_d(block))
 
-            # asyncio.run(write_tasks(write_task, batch_size=batch_size))
-            # tasks.append(write_task)
             MemoryLogger.log_memory_cpu(
-            "After writing tensorstore tasks", logger
+                "After writing tensorstore tasks", logger
             )
-
-        # Waiting for the tensorstore tasks
-        # asyncio.run(write_tasks(tasks, batch_size=batch_size))
-       
 
         for level in range(n_lvls):
             await create_downsample_dataset(
-                    dataset_path=output_path,
-                    start_scale=level,
-                    downsample_factor=scale_factor,
-                    downsample_mode=downsample_mode,
-                    compressor_kwargs=compressor_kwargs,
-                    bucket_name=bucket_name,
-                )
-
+                dataset_path=output_path,
+                start_scale=level,
+                downsample_factor=scale_factor,
+                downsample_mode=downsample_mode,
+                compressor_kwargs=compressor_kwargs,
+                bucket_name=bucket_name,
+            )
 
     # Writes top level json
     write_json(

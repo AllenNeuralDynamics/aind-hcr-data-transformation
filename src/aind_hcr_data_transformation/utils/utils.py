@@ -216,6 +216,7 @@ def sync_dir_to_s3(
         return
 
     def _upload(local_path: Path) -> None:
+        """Upload one file unless an identically-sized key already exists."""
         rel = local_path.relative_to(directory).as_posix()
         key = f"{prefix}/{rel}" if prefix else rel
         if existing.get(key) == local_path.stat().st_size:

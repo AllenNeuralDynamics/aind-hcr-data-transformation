@@ -137,3 +137,7 @@ dmypy.json
 
 # MacOs
 **/.DS_Store
+
+# Local operational/debug scripts (not released)
+scripts/submit_via_slurm_rest.py
+scripts/audit_partitions.py
