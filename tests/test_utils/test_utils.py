@@ -3,6 +3,7 @@ Unit tests of io utilities
 """
 
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -82,19 +83,98 @@ class IoUtilitiesTest(unittest.TestCase):
         result = utils.read_json_as_dict(JSON_FILE_PATH)
         self.assertEqual(expected_result, result)
 
-    @patch("subprocess.run")
-    def test_sync_dir_to_s3(self, mock_run):
-        """Tests that the sync command is called with the correct arguments"""
-        utils.sync_dir_to_s3(Path("/fake/path"), "s3://bucket/path")
-        mock_run.assert_called_once()
-        assert "sync" in mock_run.call_args[0][0]
+    @patch("aind_hcr_data_transformation.utils.utils.boto3.client")
+    def test_sync_dir_to_s3(self, mock_boto_client):
+        """Tests that each file is uploaded to the right key."""
+        mock_s3 = Mock()
+        mock_paginator = Mock()
+        mock_paginator.paginate.return_value = iter([{"Contents": []}])
+        mock_s3.get_paginator.return_value = mock_paginator
+        mock_boto_client.return_value = mock_s3
 
-    @patch("subprocess.run")
-    def test_copy_file_to_s3(self, mock_run):
-        """Tests that the copy command is called with the correct arguments"""
-        utils.copy_file_to_s3(Path("/fake/file.txt"), "s3://bucket/path")
-        mock_run.assert_called_once()
-        assert "cp" in mock_run.call_args[0][0]
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / "a.txt").write_text("hello")
+            sub = tmp_path / "sub"
+            sub.mkdir()
+            (sub / "b.txt").write_text("world")
+
+            utils.sync_dir_to_s3(tmp_path, "s3://bucket/prefix")
+
+        self.assertEqual(mock_s3.upload_file.call_count, 2)
+        uploaded_keys = sorted(
+            call.args[2] for call in mock_s3.upload_file.call_args_list
+        )
+        self.assertEqual(
+            uploaded_keys, ["prefix/a.txt", "prefix/sub/b.txt"]
+        )
+        for call in mock_s3.upload_file.call_args_list:
+            self.assertEqual(call.args[1], "bucket")
+
+    @patch("aind_hcr_data_transformation.utils.utils.boto3.client")
+    def test_sync_dir_to_s3_skips_existing(self, mock_boto_client):
+        """Tests that existing same-size objects are skipped."""
+        mock_s3 = Mock()
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            local_file = tmp_path / "a.txt"
+            local_file.write_text("hello")
+            size = local_file.stat().st_size
+
+            mock_paginator = Mock()
+            mock_paginator.paginate.return_value = iter(
+                [{"Contents": [{"Key": "prefix/a.txt", "Size": size}]}]
+            )
+            mock_s3.get_paginator.return_value = mock_paginator
+            mock_boto_client.return_value = mock_s3
+
+            utils.sync_dir_to_s3(tmp_path, "s3://bucket/prefix")
+
+        mock_s3.upload_file.assert_not_called()
+
+    def test_sync_dir_to_s3_missing_dir(self):
+        """Tests that a missing local directory raises."""
+        with self.assertRaises(FileNotFoundError):
+            utils.sync_dir_to_s3(
+                Path("/definitely/does/not/exist"),
+                "s3://bucket/prefix",
+            )
+
+    @patch("aind_hcr_data_transformation.utils.utils.boto3.client")
+    def test_copy_file_to_s3(self, mock_boto_client):
+        """Tests that an explicit destination key is used verbatim."""
+        mock_s3 = Mock()
+        mock_boto_client.return_value = mock_s3
+
+        with tempfile.NamedTemporaryFile() as tmp:
+            utils.copy_file_to_s3(tmp.name, "s3://bucket/dest/file.bin")
+
+        mock_s3.upload_file.assert_called_once()
+        call = mock_s3.upload_file.call_args
+        self.assertEqual(call.args[1], "bucket")
+        self.assertEqual(call.args[2], "dest/file.bin")
+
+    @patch("aind_hcr_data_transformation.utils.utils.boto3.client")
+    def test_copy_file_to_s3_prefix(self, mock_boto_client):
+        """Tests that a trailing slash falls back to basename."""
+        mock_s3 = Mock()
+        mock_boto_client.return_value = mock_s3
+
+        with tempfile.NamedTemporaryFile(suffix=".bin") as tmp:
+            basename = Path(tmp.name).name
+            utils.copy_file_to_s3(tmp.name, "s3://bucket/dest/")
+
+        mock_s3.upload_file.assert_called_once()
+        self.assertEqual(
+            mock_s3.upload_file.call_args.args[2], f"dest/{basename}"
+        )
+
+    def test_parse_s3_url_invalid(self):
+        """Tests that non-s3 URLs raise ValueError."""
+        with self.assertRaises(ValueError):
+            utils._parse_s3_url("https://example.com/foo")
+        with self.assertRaises(ValueError):
+            utils._parse_s3_url("s3:///no-bucket")
 
     def test_validate_slices_valid(self):
         """Tests that slices are valid when within bounds"""
@@ -226,7 +306,6 @@ class TestReadSlicesCzi(unittest.TestCase):
                 "concurrent.futures.ThreadPoolExecutor"
             ) as mock_executor_class,
         ):
-
             mock_squeeze.return_value = "squeezed_result"
             mock_executor_class.return_value.__enter__.return_value = (
                 mock_executor
@@ -290,7 +369,6 @@ class TestReadSlicesCzi(unittest.TestCase):
                 "aind_hcr_data_transformation.utils.utils.ThreadPoolExecutor"
             ) as mock_executor_class,
         ):
-
             mock_squeeze.return_value = "squeezed_result"
             mock_executor = Mock()
             mock_executor_class.return_value.__enter__.return_value = (
@@ -349,7 +427,6 @@ class TestReadSlicesCzi(unittest.TestCase):
                 side_effect=track_parallel_creation,
             ),
         ):
-
             mock_squeeze.return_value = "squeezed_result"
 
             utils.read_slices_czi(
@@ -359,6 +436,56 @@ class TestReadSlicesCzi(unittest.TestCase):
                 20,
                 max_workers=4,
             )
+
+
+class TestGetAvailableCpuCount(unittest.TestCase):
+    """Tests for ``get_available_cpu_count``."""
+
+    def test_slurm_env_takes_precedence(self):
+        """SLURM_CPUS_PER_TASK should be returned verbatim when set."""
+        with patch.dict(
+            os.environ, {"SLURM_CPUS_PER_TASK": "2"}, clear=False
+        ):
+            self.assertEqual(utils.get_available_cpu_count(), 2)
+
+    def test_slurm_env_one_returns_one(self):
+        """Explicit ``SLURM_CPUS_PER_TASK=1`` must return 1, not be
+        rounded up by any later fallback."""
+        with patch.dict(
+            os.environ, {"SLURM_CPUS_PER_TASK": "1"}, clear=False
+        ):
+            self.assertEqual(utils.get_available_cpu_count(), 1)
+
+    def test_slurm_env_zero_clamped_to_one(self):
+        """Pathological ``SLURM_CPUS_PER_TASK=0`` is clamped to 1."""
+        with patch.dict(
+            os.environ, {"SLURM_CPUS_PER_TASK": "0"}, clear=False
+        ):
+            self.assertEqual(utils.get_available_cpu_count(), 1)
+
+    def test_invalid_slurm_env_falls_through(self):
+        """Non-integer SLURM value should fall through to the next
+        resolution step instead of raising."""
+        with patch.dict(
+            os.environ,
+            {"SLURM_CPUS_PER_TASK": "not-a-number"},
+            clear=False,
+        ):
+            self.assertGreaterEqual(utils.get_available_cpu_count(), 1)
+
+    def test_affinity_used_when_no_slurm_env(self):
+        """With no SLURM env, the helper should fall back to scheduling
+        affinity (Linux) or ``multiprocessing.cpu_count``."""
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k != "SLURM_CPUS_PER_TASK"
+        }
+        with patch.dict(os.environ, env, clear=True):
+            n = utils.get_available_cpu_count()
+            self.assertGreaterEqual(n, 1)
+            if hasattr(os, "sched_getaffinity"):
+                self.assertEqual(n, len(os.sched_getaffinity(0)))
 
 
 if __name__ == "__main__":

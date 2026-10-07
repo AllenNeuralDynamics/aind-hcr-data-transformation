@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from natsort import natsorted
 
@@ -234,6 +234,52 @@ class ZeissCompressionTest(unittest.TestCase):
         """Tests Zeiss compression and zarr writing"""
         self.basic_job.run_job()
         mock_run_job.assert_called_once()
+
+    def test_czi_reader_max_workers_default_is_none(self):
+        """``czi_reader_max_workers`` defaults to ``None`` so existing
+        callers retain the auto-sized thread-pool behavior."""
+        self.assertIsNone(
+            self.basic_job_settings.czi_reader_max_workers
+        )
+
+    def test_czi_reader_max_workers_can_be_set(self):
+        """A user can force serial CZI reads (``max_workers=1``) to work
+        around the known ``czifile`` thread-safety segfault."""
+        settings = ZeissJobSettings(
+            input_source=Path(self.raw_data_folder).parent,
+            output_directory="fake_output_dir",
+            num_of_partitions=4,
+            partition_to_process=0,
+            czi_reader_max_workers=1,
+        )
+        self.assertEqual(settings.czi_reader_max_workers, 1)
+
+    @patch(
+        "aind_hcr_data_transformation.zeiss_job.czi_stack_zarr_writer",
+        new_callable=AsyncMock,
+    )
+    @patch.object(
+        ZeissCompressionJob, "_get_voxel_resolution", return_value=[1, 1, 1]
+    )
+    def test_write_stacks_forwards_czi_reader_max_workers(
+        self, _mock_voxel, mock_writer
+    ):
+        """``_write_stacks`` must forward ``czi_reader_max_workers`` to the
+        underlying writer so the setting actually reaches the CZI reader."""
+        settings = ZeissJobSettings(
+            input_source=Path(self.raw_data_folder).parent,
+            output_directory="fake_output_dir",
+            s3_location="s3://bucket/prefix",
+            num_of_partitions=1,
+            partition_to_process=0,
+            czi_reader_max_workers=1,
+        )
+        job = ZeissCompressionJob(job_settings=settings)
+        job._write_stacks([Path("/fake/tile.czi")])
+        mock_writer.assert_called_once()
+        self.assertEqual(
+            mock_writer.call_args.kwargs["czi_reader_max_workers"], 1
+        )
 
 
 if __name__ == "__main__":

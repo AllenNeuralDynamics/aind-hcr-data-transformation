@@ -20,6 +20,7 @@ from aind_hcr_data_transformation.compress.omezarr_metadata import (
     write_ome_ngff_metadata,
 )
 from aind_hcr_data_transformation.utils.utils import (
+    MemoryLogger,
     czi_block_generator,
     pad_array_n_d,
     write_json,
@@ -301,7 +302,7 @@ async def write_tasks(list_of_tasks: List, batch_size: int = 6):
         await asyncio.gather(*batch)
 
 
-def czi_stack_zarr_writer(
+async def czi_stack_zarr_writer(
     czi_path: str,
     output_path: str,
     voxel_size: List[float],
@@ -316,6 +317,7 @@ def czi_stack_zarr_writer(
     downsample_mode: Optional[str] = "mean",
     batch_size: Optional[int] = 6,
     bucket_name: Optional[str] = None,
+    czi_reader_max_workers: Optional[int] = None,
 ):
     """
     Writes a fused Zeiss channel in OMEZarr
@@ -442,15 +444,20 @@ def czi_stack_zarr_writer(
             zyx_resolution=voxel_size,
             compressor_kwargs=compressor_kwargs,
         )
-
-        tasks = []
+        MemoryLogger.log_memory_cpu(
+            "Before scheduling tensorstore tasks", logger
+        )
         dataset = ts.open(spec).result()
+
+        # add memorylogger to this section to get overhead
+        # of writing the tasks
 
         # shard size must be TCZYX order
         for block, axis_area in czi_block_generator(
             czi,
             axis_jumps=shard_size[-3],
             slice_axis="z",
+            max_workers=czi_reader_max_workers,
         ):
             region = (
                 slice(None),
@@ -459,22 +466,23 @@ def czi_stack_zarr_writer(
                 slice(0, dataset_shape[-2]),
                 slice(0, dataset_shape[-1]),
             )
-            write_task = dataset[region].write(pad_array_n_d(block))
-            tasks.append(write_task)
+            MemoryLogger.log_memory_cpu(
+                "Before Writing tensorstore tasks", logger
+            )
+            await dataset[region].write(pad_array_n_d(block))
 
-        # Waiting for the tensorstore tasks
-        asyncio.run(write_tasks(tasks, batch_size=batch_size))
+            MemoryLogger.log_memory_cpu(
+                "After writing tensorstore tasks", logger
+            )
 
         for level in range(n_lvls):
-            asyncio.run(
-                create_downsample_dataset(
-                    dataset_path=output_path,
-                    start_scale=level,
-                    downsample_factor=scale_factor,
-                    downsample_mode=downsample_mode,
-                    compressor_kwargs=compressor_kwargs,
-                    bucket_name=bucket_name,
-                )
+            await create_downsample_dataset(
+                dataset_path=output_path,
+                start_scale=level,
+                downsample_factor=scale_factor,
+                downsample_mode=downsample_mode,
+                compressor_kwargs=compressor_kwargs,
+                bucket_name=bucket_name,
             )
 
     # Writes top level json

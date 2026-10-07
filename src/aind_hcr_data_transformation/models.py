@@ -84,7 +84,19 @@ class ZeissJobSettings(BasicJobSettings):
         title="Downsample Mode",
     )
     tensorstore_batch_size: int = Field(
-        default=3,
+        default=1,
         description="Batch size to execute concurrent tensorstore tasks",
         title="Tensorstore batch size",
+    )
+    czi_reader_max_workers: Optional[int] = Field(
+        default=None,
+        description=(
+            "Maximum number of threads used by the CZI subblock reader. "
+            "When None (default), the reader auto-sizes the thread pool "
+            "from the available CPU count. Set to 1 to force a fully "
+            "serial reader, which sidesteps a known thread-safety bug "
+            "in ``czifile`` that can segfault under concurrent subblock "
+            "reads."
+        ),
+        title="CZI Reader Max Workers",
     )

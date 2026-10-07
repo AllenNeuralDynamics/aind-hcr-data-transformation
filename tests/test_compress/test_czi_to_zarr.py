@@ -1,5 +1,6 @@
 """Test suite for the ZarrV3 data transformation module."""
 
+import asyncio
 import logging
 import unittest
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -359,7 +360,7 @@ class TestCreateDownsampleDataset(unittest.IsolatedAsyncioTestCase):
         mock_czi_block_generator.return_value = [(fake_block, slice(0, 10))]
 
         mock_dataset = MagicMock()
-        mock_dataset.__getitem__.return_value.write.return_value = AsyncMock()
+        mock_dataset.__getitem__.return_value.write = AsyncMock()
         mock_ts_result = MagicMock()
         mock_ts_result.result.return_value = mock_dataset
         mock_ts_open.return_value = mock_ts_result
@@ -368,28 +369,32 @@ class TestCreateDownsampleDataset(unittest.IsolatedAsyncioTestCase):
         mock_get_pyramid_metadata.return_value = {"meta": "data"}
         mock_write_ome_ngff_metadata.return_value = {"ome": "ngff"}
 
-        # Call the function under test
-        czi_stack_zarr_writer(
-            czi_path="/fake/path/image.czi",
-            output_path="/fake/output",
-            voxel_size=[1.0, 1.0, 1.0],
-            shard_size=[10, 10, 10],
-            chunk_size=[5, 5, 5],
-            scale_factor=[2, 2, 2],
-            n_lvls=2,
-            channel_name="DAPI",
-            logger=mock_logger,
-            stack_name="my_stack",
-            compressor_kwargs={"cname": "zstd"},
-            downsample_mode="mean",
-            batch_size=4,
-            bucket_name=None,
+        # Call the function under test (it is a coroutine, so run it).
+        asyncio.run(
+            czi_stack_zarr_writer(
+                czi_path="/fake/path/image.czi",
+                output_path="/fake/output",
+                voxel_size=[1.0, 1.0, 1.0],
+                shard_size=[10, 10, 10],
+                chunk_size=[5, 5, 5],
+                scale_factor=[2, 2, 2],
+                n_lvls=2,
+                channel_name="DAPI",
+                logger=mock_logger,
+                stack_name="my_stack",
+                compressor_kwargs={"cname": "zstd"},
+                downsample_mode="mean",
+                batch_size=4,
+                bucket_name=None,
+            )
         )
 
         # Assertions
         mock_ts_open.assert_called()
         mock_create_spec.assert_called_once()
-        mock_write_tasks.assert_awaited_once()
+        # write_tasks is dead code in czi_stack_zarr_writer (inlined as
+        # `await dataset[region].write(...)`), so it must not be awaited.
+        mock_write_tasks.assert_not_awaited()
         self.assertEqual(mock_create_downsample_dataset.await_count, 2)
         mock_write_json.assert_called_once()
         mock_logger.info.assert_called()

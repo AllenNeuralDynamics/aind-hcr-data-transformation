@@ -377,7 +377,6 @@ def _downscale_origin(
     new_origins = [current_origin.tolist()]
 
     for _ in range(n_levels - 1):
-
         # Calculate the center shift for the new origin
         center_shift = (current_voxel_size * (scale_factors - 1)) / 2
         current_origin += center_shift

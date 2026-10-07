@@ -1,12 +1,14 @@
 """Module to handle zeiss data compression"""
 
 import logging
+import asyncio
 import os
 import sys
 from pathlib import Path
 from time import time
 from typing import Any, Dict, List
 from urllib.parse import urlparse
+import multiprocessing
 
 from aind_data_transformation.core import GenericEtl, JobResponse, get_parser
 from packaging import version
@@ -20,7 +22,7 @@ from aind_hcr_data_transformation.models import (
 )
 from aind_hcr_data_transformation.utils import utils
 
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "WARNING"))
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "DEBUG"))
 
 
 class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
@@ -194,7 +196,7 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
             )
             logging.info(msg)
 
-            czi_stack_zarr_writer(
+            asyncio.run(czi_stack_zarr_writer(
                 czi_path=str(stack),
                 output_path=output_path,
                 voxel_size=voxel_size_zyx,
@@ -209,6 +211,10 @@ class ZeissCompressionJob(GenericEtl[ZeissJobSettings]):
                 compressor_kwargs=compressor,
                 bucket_name=bucket_name,
                 batch_size=self.job_settings.tensorstore_batch_size,
+                czi_reader_max_workers=(
+                    self.job_settings.czi_reader_max_workers
+                ),
+            )
             )
 
     def _upload_derivatives_folder(self):
@@ -273,4 +279,5 @@ def job_entrypoint(sys_args: list):
 
 
 if __name__ == "__main__":
+    multiprocessing.set_start_method("spawn", force=True)
     job_entrypoint(sys.argv[1:])
